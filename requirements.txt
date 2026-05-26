@@ -1,0 +1,22 @@
+# Recon Engine Requirements - Refactored Version
+# NO win32com dependency!
+
+# Core dependencies
+streamlit>=1.31.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# Formula calculation (pure Python - no Excel required!)
+formulas>=1.2.0
+
+# Optional (for older Excel files)
+xlrd>=2.0.1
+
+# Binary Excel (.xlsb) support
+pyxlsb>=1.0.9
+
+# Date handling
+python-dateutil>=2.8.2
+
+# Note: win32com is NOT required! 
+# All Excel operations use openpyxl and pandas only.
