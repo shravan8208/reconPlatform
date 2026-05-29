@@ -79,6 +79,14 @@ OPERATION_REGISTRY = {
         "when_to_use": "When you need to calculate values based on other columns (e.g., Amount = Qty x Price)",
         "difficulty": "standard",
     },
+    "formula_broadcast": {
+        "user_label": "Broadcast Formula",
+        "category": "Clean & Transform",
+        "icon": "broadcast_on_personal",
+        "description": "Write a formula into a fixed cell across every sheet in a workbook, or into one sheet across every file in a group",
+        "when_to_use": "When you need to put the same formula (e.g. =SUM(A1:A9)) in cell A10 of every sheet, or in the same cell across 20 files",
+        "difficulty": "standard",
+    },
     "replace": {
         "user_label": "Find & Replace Values",
         "category": "Clean & Transform",

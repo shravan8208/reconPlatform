@@ -10,7 +10,8 @@ from .formula import (
     apply_multiple_formulas_to_xls,
     run_convert_to_values_step,
     adjust_formula_for_row,
-    clear_vlookup_cache
+    clear_vlookup_cache,
+    run_formula_broadcast_step,
 )
 
 # Copy/Paste operations
@@ -142,6 +143,7 @@ __all__ = [
     'apply_multiple_formulas_to_xls',
     'run_convert_to_values_step',
     'adjust_formula_for_row',
+    'run_formula_broadcast_step',
     
     # Copy/Paste
     'run_copy_paste_step',

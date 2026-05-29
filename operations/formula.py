@@ -1198,3 +1198,127 @@ def run_convert_to_values_step(file_path, sheet_name, col_letter, start_row, end
         return False, f"Error converting to values: {str(e)}"
 
 
+# ============================================================================
+# BROADCAST FORMULA — write a formula to a fixed cell across all sheets
+# in one workbook, OR across all files in a file group (one sheet per file)
+# ============================================================================
+
+import os as _os
+from pathlib import Path as _Path
+
+
+def run_formula_broadcast_step(
+    scope: str,
+    formula: str,
+    cell: str,
+    file_path: str = "",
+    file_paths: list = None,
+    sheet_name: str = "",
+    include_sheets: list = None,
+    exclude_sheets: list = None,
+) -> tuple[bool, str]:
+    """
+    Write a formula to a fixed cell across multiple sheets or multiple files.
+
+    scope="all_sheets"
+        Writes formula → cell in every sheet of a single workbook.
+        Respects include_sheets / exclude_sheets filters.
+
+    scope="all_files"
+        Writes formula → sheet_name!cell in every file in file_paths.
+        Falls back to file_path if file_paths is empty.
+    """
+    if not formula:
+        return False, "Formula is required"
+    if not cell:
+        return False, "Target cell is required"
+
+    formula_clean = formula.strip()
+    if not formula_clean.startswith("="):
+        formula_clean = "=" + formula_clean
+
+    cell_ref = cell.strip().upper()
+
+    # ── ALL SHEETS in one workbook ────────────────────────────────────────────
+    if scope == "all_sheets":
+        if not file_path:
+            return False, "File path is required for 'all sheets' mode"
+        if not _os.path.exists(file_path):
+            return False, f"File not found: {file_path}"
+
+        try:
+            wb = wb_cache.load(file_path)
+        except Exception as exc:
+            return False, f"Could not open file: {exc}"
+
+        incl = {s.strip().lower() for s in (include_sheets or []) if s.strip()}
+        excl = {s.strip().lower() for s in (exclude_sheets or []) if s.strip()}
+
+        updated = 0
+        skipped: list[str] = []
+
+        for sname in wb.sheetnames:
+            sn_lower = sname.lower()
+            if incl and sn_lower not in incl:
+                skipped.append(sname)
+                continue
+            if sn_lower in excl:
+                skipped.append(sname)
+                continue
+            wb[sname][cell_ref] = formula_clean
+            updated += 1
+
+        wb_cache.save(wb, file_path)
+
+        msg = f"Written '{formula_clean}' → {cell_ref} in {updated} sheet(s)"
+        if skipped:
+            preview = skipped[:5]
+            if len(skipped) > 5:
+                preview.append(f"…+{len(skipped) - 5} more")
+            msg += f"  (skipped: {', '.join(preview)})"
+        return True, msg
+
+    # ── ALL FILES — one specific sheet in each file ───────────────────────────
+    elif scope == "all_files":
+        files = list(file_paths or [])
+        if not files and file_path:
+            files = [file_path]
+        if not files:
+            return False, "No files to update"
+        if not sheet_name:
+            return False, "Sheet name is required for 'all files' mode"
+
+        updated = 0
+        errors:  list[str] = []
+
+        for fp in files:
+            if not _os.path.exists(fp):
+                errors.append(f"Not found: {_Path(fp).name}")
+                continue
+            try:
+                wb = wb_cache.load(fp)
+                # exact match first, then case-insensitive
+                matched = sheet_name if sheet_name in wb.sheetnames else next(
+                    (s for s in wb.sheetnames if s.lower() == sheet_name.lower()), None
+                )
+                if not matched:
+                    errors.append(f"Sheet '{sheet_name}' missing in {_Path(fp).name}")
+                    continue
+                wb[matched][cell_ref] = formula_clean
+                wb_cache.save(wb, fp)
+                updated += 1
+            except Exception as exc:
+                errors.append(f"{_Path(fp).name}: {exc}")
+
+        msg = f"Written '{formula_clean}' → {sheet_name}!{cell_ref} in {updated} file(s)"
+        if errors:
+            preview = errors[:3]
+            if len(errors) > 3:
+                preview.append(f"…+{len(errors) - 3} more")
+            msg += f".  Errors: {'; '.join(preview)}"
+        return updated > 0, msg
+
+    else:
+        return False, f"Unknown scope '{scope}'. Use 'all_sheets' or 'all_files'."
+
+

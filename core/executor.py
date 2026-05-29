@@ -9,7 +9,7 @@ import streamlit as st
 
 from core import wb_cache
 from operations import (
-    run_formula_step, run_convert_to_values_step, run_copy_paste_step,
+    run_formula_step, run_convert_to_values_step, run_formula_broadcast_step, run_copy_paste_step,
     run_replace_single, run_forward_fill_step, run_insert_delete_step,
     run_delete_columns_step, run_clear_columns_data_step,
     run_vlookup_step, run_vlookup_explicit_step, run_advance_vlookup_step,
@@ -213,6 +213,22 @@ def execute_step(step):
             _resolve_column(file_path, cfg.get("sheet"), cfg),
             cfg.get("start"), cfg.get("end"),
             cfg.get("convert", False),
+        )
+    if step_type == "formula_broadcast":
+        # all_sheets: uses the already-resolved file_path
+        # all_files:  needs file group — executor uses single file_path only
+        scope = cfg.get("scope", "all_sheets")
+        incl = [s.strip() for s in (cfg.get("include_sheets") or "").split(",") if s.strip()]
+        excl = [s.strip() for s in (cfg.get("exclude_sheets") or "").split(",") if s.strip()]
+        return run_formula_broadcast_step(
+            scope=scope,
+            formula=cfg.get("formula", ""),
+            cell=cfg.get("cell", ""),
+            file_path=file_path,
+            file_paths=[],          # single-file fallback; app layer passes full group
+            sheet_name=cfg.get("sheet_name", ""),
+            include_sheets=incl,
+            exclude_sheets=excl,
         )
     if step_type == "copy_paste":
         return run_copy_paste_step(
@@ -623,6 +639,21 @@ def execute_step_with_file_map(step, file_map):
 
     if step_type == "formula":
         return run_formula_step(file_path, cfg.get("sheet"), cfg.get("formula"), _resolve_column(file_path, cfg.get("sheet"), cfg), cfg.get("start"), cfg.get("end"), cfg.get("convert", False))
+    if step_type == "formula_broadcast":
+        scope = cfg.get("scope", "all_sheets")
+        incl = [s.strip() for s in (cfg.get("include_sheets") or "").split(",") if s.strip()]
+        excl = [s.strip() for s in (cfg.get("exclude_sheets") or "").split(",") if s.strip()]
+        fp_group = [path_for(lbl) for lbl in (cfg.get("file_paths_labels") or []) if path_for(lbl)]
+        return run_formula_broadcast_step(
+            scope=scope,
+            formula=cfg.get("formula", ""),
+            cell=cfg.get("cell", ""),
+            file_path=file_path,
+            file_paths=fp_group,
+            sheet_name=cfg.get("sheet_name", ""),
+            include_sheets=incl,
+            exclude_sheets=excl,
+        )
     if step_type == "copy_paste":
         return run_copy_paste_step(file_path, cfg.get("sheet"), cfg.get("src_col"), cfg.get("tgt_cols") if cfg.get("tgt_cols") else cfg.get("tgt_col"), cfg.get("paste_type"), cfg.get("header_row", 1))
     if step_type == "convert_values":

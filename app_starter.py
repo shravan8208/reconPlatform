@@ -21,6 +21,7 @@ from operations import (
     # Formula operations
     run_formula_step,
     run_convert_to_values_step,
+    run_formula_broadcast_step,
     
     # Copy/Paste
     run_copy_paste_step,
@@ -747,6 +748,7 @@ def populate_form_from_step(step_type: str, config: dict):
                          ("tgt_file", "se_tgt_file")],
         "sheet_updater": [("src_file", "su_src_file"), ("src_sheet", "su_src_sheet"),
                           ("tgt_file", "su_tgt_file")],
+        "formula_broadcast": [("file", "fb_file")],
         "advance_vlookup": [("file", "adv_vlookup_file"), ("sheet", "adv_vlookup_sheet"), ("prefix", "adv_vlookup_prefix"),
                            ("src_col", "adv_vlookup_src_col"), ("lookup_file", "adv_vlookup_lookup_file"),
                            ("lookup_sheet", "adv_vlookup_lookup_sheet"), ("key_col", "adv_vlookup_key_col"),
@@ -1136,6 +1138,16 @@ def populate_form_from_step(step_type: str, config: dict):
             st.session_state[f"se_filter_cond_{_i}_op"]  = _f.get("operator", "eq")
             st.session_state[f"se_filter_cond_{_i}_val"] = str(_f.get("value", "") or "")
 
+    # Special handling for formula_broadcast
+    if step_type == "formula_broadcast":
+        st.session_state["fb_scope"]          = cfg.get("scope", "all_sheets")
+        st.session_state["fb_formula"]        = cfg.get("formula", "")
+        st.session_state["fb_cell"]           = cfg.get("cell", "")
+        st.session_state["fb_file"]           = cfg.get("file", "")
+        st.session_state["fb_include_sheets"] = cfg.get("include_sheets", "")
+        st.session_state["fb_exclude_sheets"] = cfg.get("exclude_sheets", "")
+        st.session_state["fb_sheet_name"]     = cfg.get("sheet_name", "")
+
     # Special handling for sheet_updater
     if step_type == "sheet_updater":
         st.session_state["su_src_file"]           = cfg.get("src_file", "")
@@ -1205,6 +1217,9 @@ def render_add_steps_tab():
         st.markdown('<div class="pkf-section">Transform</div>', unsafe_allow_html=True)
         if st.button("Formula", use_container_width=True):
             st.session_state.adding_step = "formula"
+        if st.button("Broadcast Formula", use_container_width=True,
+                     help="Write a formula into one fixed cell across all sheets in a workbook, or across all files in a group"):
+            st.session_state.adding_step = "formula_broadcast"
         if st.button("Copy/Paste", use_container_width=True):
             st.session_state.adding_step = "copy_paste"
         if st.button("Convert Values", use_container_width=True):
@@ -1290,6 +1305,8 @@ def render_add_steps_tab():
         
         if step_type == "formula":
             render_formula_form()
+        elif step_type == "formula_broadcast":
+            render_formula_broadcast_form()
         elif step_type == "copy_paste":
             render_copy_paste_form()
         elif step_type == "convert_values":
@@ -1435,6 +1452,128 @@ def render_formula_form():
             "column": resolved_col,
             "start": start, "end": end, "convert": convert,
             "export": export,
+        })
+
+
+def render_formula_broadcast_form():
+    """Broadcast Formula — write a formula to a fixed cell across all sheets or all files."""
+    st.markdown('<div class="pkf-section">Broadcast Formula</div>', unsafe_allow_html=True)
+    st.caption(
+        "Write **one formula** into **one fixed cell** everywhere — across every sheet in a workbook, "
+        "or across the same sheet in every file in a group."
+    )
+
+    # ── Scope ─────────────────────────────────────────────────────────────────
+    _scope_opts   = ["All Sheets in one Workbook", "One Sheet across All Files"]
+    _scope_keys   = ["all_sheets", "all_files"]
+    _saved_scope  = st.session_state.get("fb_scope", "all_sheets")
+    _scope_idx    = _scope_keys.index(_saved_scope) if _saved_scope in _scope_keys else 0
+    scope_label   = st.selectbox(
+        "Scope",
+        _scope_opts,
+        index=_scope_idx,
+        key="fb_scope_label",
+        help="**All Sheets**: same cell in every sheet of one file.  "
+             "**All Files**: same cell+sheet in every file registered under a file-group label.",
+    )
+    scope = _scope_keys[_scope_opts.index(scope_label)]
+
+    st.divider()
+
+    # ── Formula + Cell ────────────────────────────────────────────────────────
+    st.markdown("**What to write**")
+    fc1, fc2 = st.columns([4, 1])
+    with fc1:
+        fb_formula = st.text_input(
+            "Formula",
+            value=st.session_state.get("fb_formula", ""),
+            key="fb_formula",
+            placeholder="e.g.  =SUM(A1:A9)  or  =TOTAL",
+        )
+    with fc2:
+        fb_cell = st.text_input(
+            "Target Cell",
+            value=st.session_state.get("fb_cell", ""),
+            key="fb_cell",
+            placeholder="e.g.  A10",
+        )
+
+    st.divider()
+
+    # ── File selection ────────────────────────────────────────────────────────
+    if scope == "all_sheets":
+        st.markdown("**Workbook**")
+        fb_file = st.selectbox("File", get_files(), key="fb_file",
+                               help="The workbook whose sheets will all receive the formula")
+
+        st.markdown("**Sheet Filters  *(optional)***")
+        fc3, fc4 = st.columns(2)
+        with fc3:
+            fb_include = st.text_input(
+                "Include only these sheets  *(comma-separated, empty = all)*",
+                value=st.session_state.get("fb_include_sheets", ""),
+                key="fb_include_sheets",
+                placeholder="e.g.  Jan, Feb, Mar",
+            )
+        with fc4:
+            fb_exclude = st.text_input(
+                "Exclude these sheets  *(comma-separated)*",
+                value=st.session_state.get("fb_exclude_sheets", ""),
+                key="fb_exclude_sheets",
+                placeholder="e.g.  Summary, Template",
+            )
+        fb_sheet_name = ""
+
+    else:  # all_files
+        st.markdown("**File Group**")
+        fb_file = st.selectbox(
+            "File / Group Label",
+            get_files(),
+            key="fb_file",
+            help="Select a file label — if it was collected as a group (folder scan), "
+                 "the formula is written into every file in the group",
+        )
+        fb_sheet_name = st.text_input(
+            "Sheet Name  *(must exist in each file)*",
+            value=st.session_state.get("fb_sheet_name", ""),
+            key="fb_sheet_name",
+            placeholder="e.g.  Data  or  Sheet1",
+        )
+        fb_include = ""
+        fb_exclude = ""
+
+    export = st.checkbox("Export after run", value=True, key="fb_export")
+
+    # ── Save step ─────────────────────────────────────────────────────────────
+    if st.button("➕ Add Broadcast Formula Step", type="primary", use_container_width=True):
+        if not fb_formula or not fb_formula.strip():
+            st.error("Please enter a formula.")
+            return
+        if not fb_cell or not fb_cell.strip():
+            st.error("Please enter a target cell (e.g. A10).")
+            return
+        if not fb_file:
+            st.error("Please select a file.")
+            return
+        if scope == "all_files" and not fb_sheet_name.strip():
+            st.error("Please enter the sheet name for 'All Files' mode.")
+            return
+
+        _scope_short = "all-sheets" if scope == "all_sheets" else "all-files"
+        if scope == "all_sheets":
+            _label = f"Broadcast Formula  [{_scope_short}]  {fb_formula.strip()} → {fb_cell.strip().upper()}"
+        else:
+            _label = f"Broadcast Formula  [{_scope_short}]  {fb_formula.strip()} → {fb_sheet_name}!{fb_cell.strip().upper()}"
+
+        add_step("formula_broadcast", _label, {
+            "scope":          scope,
+            "formula":        fb_formula.strip(),
+            "cell":           fb_cell.strip().upper(),
+            "file":           fb_file,
+            "sheet_name":     fb_sheet_name.strip(),
+            "include_sheets": fb_include.strip(),
+            "exclude_sheets": fb_exclude.strip(),
+            "export":         export,
         })
 
 
@@ -6328,6 +6467,31 @@ def execute_step(step):
             fallback_lookups=fb_lookups,
         )
 
+    if step_type == "formula_broadcast":
+        _fb_scope = cfg.get("scope", "all_sheets")
+        _fb_file_label = cfg.get("file", "")
+        _fb_fp = get_file_path(_fb_file_label) if _fb_file_label else ""
+        # For all_files: collect every file in the group
+        _fb_fps = []
+        if _fb_scope == "all_files":
+            _grp = st.session_state.get("uploaded_file_groups", {}).get(_fb_file_label)
+            if _grp:
+                _fb_fps = list(_grp)
+            elif _fb_fp:
+                _fb_fps = [_fb_fp]
+        _incl = [s.strip() for s in (cfg.get("include_sheets") or "").split(",") if s.strip()]
+        _excl = [s.strip() for s in (cfg.get("exclude_sheets") or "").split(",") if s.strip()]
+        return run_formula_broadcast_step(
+            scope=_fb_scope,
+            formula=cfg.get("formula", ""),
+            cell=cfg.get("cell", ""),
+            file_path=_fb_fp or "",
+            file_paths=_fb_fps,
+            sheet_name=cfg.get("sheet_name", ""),
+            include_sheets=_incl,
+            exclude_sheets=_excl,
+        )
+
     if step_type == "sheet_updater":
         src_path, err = _resolve_required_path(cfg.get("src_file"), field="src_file")
         if err: return False, err
@@ -7083,6 +7247,23 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             on_missing_default=cfg.get("on_missing_default", 0),
         )
 
+    if step_type == "formula_broadcast":
+        _fb_scope = cfg.get("scope", "all_sheets")
+        _fb_fp = path_for(cfg.get("file")) or ""
+        _fb_fps = [path_for(l) for l in (cfg.get("file_paths_labels") or []) if path_for(l)]
+        _incl = [s.strip() for s in (cfg.get("include_sheets") or "").split(",") if s.strip()]
+        _excl = [s.strip() for s in (cfg.get("exclude_sheets") or "").split(",") if s.strip()]
+        return run_formula_broadcast_step(
+            scope=_fb_scope,
+            formula=cfg.get("formula", ""),
+            cell=cfg.get("cell", ""),
+            file_path=_fb_fp,
+            file_paths=_fb_fps,
+            sheet_name=cfg.get("sheet_name", ""),
+            include_sheets=_incl,
+            exclude_sheets=_excl,
+        )
+
     if step_type == "sheet_updater":
         src_p = path_for(cfg.get("src_file"))
         if not src_p:
@@ -7163,6 +7344,8 @@ def _determine_modified_file_labels(step_type: str, cfg: dict) -> list[str]:
         return []   # split_export writes to new files, never modifies the source
     if step_type == "sheet_updater":
         return [cfg.get("tgt_file", "")]
+    if step_type == "formula_broadcast":
+        return [cfg.get("file", "")]
     if step_type in ("import", "append", "header_map"):
         return [cfg.get("tgt_file", "")]
     if step_type == "vlookup"and (cfg.get("mode") == "explicit"or cfg.get("lookup_value_file")):
@@ -7739,6 +7922,9 @@ def add_step(step_type, name, config):
                     continue
             # sheet_updater writes to dynamically matched sheets — no tgt_sheet dropdown
             if step_type == "sheet_updater" and sheet_key == "tgt_sheet":
+                continue
+            # formula_broadcast targets sheets dynamically — no tgt_sheet dropdown
+            if step_type == "formula_broadcast":
                 continue
             # pivot writes to a user-named sheet — sheet name is stored in tgt_sheet as a text field,
             # not a dropdown, so the Excel-label guard is irrelevant; skip to avoid false positives
