@@ -22,6 +22,7 @@ from operations import (
     run_format_step,
     run_pivot_step,
     run_split_export_step,
+    run_sheet_updater_step,
     run_delete_sheets_step,
 )
 from ui.components import (
@@ -495,6 +496,25 @@ def execute_step(step):
             header_font_color=cfg.get("header_font_color", "FFFFFF"),
         )
 
+    if step_type == "sheet_updater":
+        src_path, err = _resolve(cfg.get("src_file"), "src_file")
+        if err: return False, err
+        tgt_label = cfg.get("tgt_file")
+        tgt_path = get_file_path(tgt_label) if tgt_label else ""
+        return run_sheet_updater_step(
+            src_file_path=src_path,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=tgt_path or "",
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            tgt_col_lookup=cfg.get("tgt_col_lookup", ""),
+            tgt_col_write=cfg.get("tgt_col_write", ""),
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+            case_sensitive=bool(cfg.get("case_sensitive", False)),
+        )
+
     return False, f"Unknown operation: {step_type}"
 
 
@@ -783,6 +803,24 @@ def execute_step_with_file_map(step, file_map):
             include_status_col=bool(cfg.get("include_status_col", True)),
             status_col_name=cfg.get("status_col_name", "Status"),
             on_missing_default=cfg.get("on_missing_default", 0),
+        )
+
+    if step_type == "sheet_updater":
+        src_p = path_for(cfg.get("src_file"))
+        if not src_p: return False, f"Source file not found: {cfg.get('src_file')}"
+        tgt_p = path_for(cfg.get("tgt_file")) or ""
+        return run_sheet_updater_step(
+            src_file_path=src_p,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=tgt_p,
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            tgt_col_lookup=cfg.get("tgt_col_lookup", ""),
+            tgt_col_write=cfg.get("tgt_col_write", ""),
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+            case_sensitive=bool(cfg.get("case_sensitive", False)),
         )
 
     if step_type == "split_export":

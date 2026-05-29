@@ -114,6 +114,12 @@ from operations import (
     SPLIT_MODE_KEYS,
     SPLIT_MODE_LABELS,
 
+    # Sheet Updater
+    run_sheet_updater_step,
+    SHEET_MATCH_MODES,
+    SHEET_MATCH_KEYS,
+    SHEET_MATCH_LABELS,
+
     # Sheet Ops
     run_delete_sheets_step,
     get_sheet_names,
@@ -739,6 +745,8 @@ def populate_form_from_step(step_type: str, config: dict):
                    ("tgt_file", "pivot_tgt_file")],
         "split_export": [("src_file", "se_src_file"), ("src_sheet", "se_src_sheet"),
                          ("tgt_file", "se_tgt_file")],
+        "sheet_updater": [("src_file", "su_src_file"), ("src_sheet", "su_src_sheet"),
+                          ("tgt_file", "su_tgt_file")],
         "advance_vlookup": [("file", "adv_vlookup_file"), ("sheet", "adv_vlookup_sheet"), ("prefix", "adv_vlookup_prefix"),
                            ("src_col", "adv_vlookup_src_col"), ("lookup_file", "adv_vlookup_lookup_file"),
                            ("lookup_sheet", "adv_vlookup_lookup_sheet"), ("key_col", "adv_vlookup_key_col"),
@@ -1128,6 +1136,21 @@ def populate_form_from_step(step_type: str, config: dict):
             st.session_state[f"se_filter_cond_{_i}_op"]  = _f.get("operator", "eq")
             st.session_state[f"se_filter_cond_{_i}_val"] = str(_f.get("value", "") or "")
 
+    # Special handling for sheet_updater
+    if step_type == "sheet_updater":
+        st.session_state["su_src_file"]           = cfg.get("src_file", "")
+        st.session_state["su_src_sheet"]          = cfg.get("src_sheet", "")
+        st.session_state["su_col_category"]       = cfg.get("src_col_category", "")
+        st.session_state["su_col_particulars"]    = cfg.get("src_col_particulars", "")
+        st.session_state["su_col_value"]          = cfg.get("src_col_value", "")
+        st.session_state["su_tgt_file"]           = cfg.get("tgt_file", "")
+        _sm = cfg.get("sheet_match_mode", "cat_in_sheet")
+        st.session_state["su_sheet_match_idx"]    = SHEET_MATCH_KEYS.index(_sm) if _sm in SHEET_MATCH_KEYS else 0
+        st.session_state["su_tgt_col_lookup"]     = cfg.get("tgt_col_lookup", "")
+        st.session_state["su_tgt_col_write"]      = cfg.get("tgt_col_write", "")
+        st.session_state["su_tgt_header_row"]     = int(cfg.get("tgt_header_row", 1) or 1)
+        st.session_state["su_case_sensitive"]     = bool(cfg.get("case_sensitive", False))
+
     # Special handling for add_files
     if step_type == "add_files":
         files = cfg.get("files", [])
@@ -1240,6 +1263,9 @@ def render_add_steps_tab():
         if st.button("Split Export", use_container_width=True,
                      help="Slice data into one file/multiple sheets, multiple files, or two-level file+sheet splits by column values"):
             st.session_state.adding_step = "split_export"
+        if st.button("Sheet Updater", use_container_width=True,
+                     help="Push values from a master (category/particulars/value) sheet into matching sheets of a target workbook"):
+            st.session_state.adding_step = "sheet_updater"
     
     # Column 4: Data Input
     with col4:
@@ -1310,6 +1336,8 @@ def render_add_steps_tab():
             render_pivot_form()
         elif step_type == "split_export":
             render_split_export_form()
+        elif step_type == "sheet_updater":
+            render_sheet_updater_form()
         elif step_type == "input_source":
             render_input_source_form()
         elif step_type == "normalize_import":
@@ -5112,6 +5140,203 @@ def render_split_export_form():
         })
 
 
+def render_sheet_updater_form():
+    """Sheet Updater — push master (category/particulars/value) values into matching sheets."""
+    from core import wb_cache as _wbc
+
+    st.markdown('<div class="pkf-section">Sheet Updater</div>', unsafe_allow_html=True)
+    st.caption(
+        "Read a master sheet with **Category**, **Particulars**, and **Value** columns. "
+        "For each row: match the category to a sheet in the target workbook, find the "
+        "Particulars label in a lookup column, and write the Value into the specified column."
+    )
+
+    # ── Master (source) ──────────────────────────────────────────────────────
+    st.markdown("**Master File  *(the file with Category / Particulars / Value)***")
+    m1, m2 = st.columns([3, 3])
+    with m1:
+        su_src_file = st.selectbox("Master File", get_files(), key="su_src_file")
+    with m2:
+        su_src_sheet = sheet_selectbox("Master Sheet", su_src_file, key="su_src_sheet")
+
+    # Auto-detect columns from master sheet
+    _su_ctx = (su_src_file or "", su_src_sheet or "")
+    if st.session_state.get("su_detect_ctx") != _su_ctx:
+        st.session_state["su_detect_ctx"] = _su_ctx
+        st.session_state["su_col_list"] = []
+        if su_src_file and su_src_sheet:
+            _fp = get_file_path(su_src_file)
+            if _fp:
+                try:
+                    _df = _wbc.read_excel(_fp, sheet_name=su_src_sheet, nrows=1)
+                    st.session_state["su_col_list"] = [str(c).strip() for c in _df.columns]
+                except Exception:
+                    st.session_state["su_col_list"] = []
+
+    _su_cols = st.session_state.get("su_col_list", [])
+    _col_opts = [""] + _su_cols if _su_cols else [""]
+
+    st.markdown("**Master Columns**")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if _su_cols:
+            _cat_idx = _col_opts.index(st.session_state.get("su_col_category", "")) \
+                       if st.session_state.get("su_col_category", "") in _col_opts else 0
+            su_col_category = st.selectbox(
+                "Category Column *(used to match sheet name)*",
+                _col_opts, index=_cat_idx, key="su_col_category"
+            )
+        else:
+            su_col_category = st.text_input(
+                "Category Column *(header name or letter)*",
+                value=st.session_state.get("su_col_category", ""),
+                key="su_col_category"
+            )
+    with c2:
+        if _su_cols:
+            _part_idx = _col_opts.index(st.session_state.get("su_col_particulars", "")) \
+                        if st.session_state.get("su_col_particulars", "") in _col_opts else 0
+            su_col_particulars = st.selectbox(
+                "Particulars Column *(row lookup key)*",
+                _col_opts, index=_part_idx, key="su_col_particulars"
+            )
+        else:
+            su_col_particulars = st.text_input(
+                "Particulars Column *(header name or letter)*",
+                value=st.session_state.get("su_col_particulars", ""),
+                key="su_col_particulars"
+            )
+    with c3:
+        if _su_cols:
+            _val_idx = _col_opts.index(st.session_state.get("su_col_value", "")) \
+                       if st.session_state.get("su_col_value", "") in _col_opts else 0
+            su_col_value = st.selectbox(
+                "Value Column *(what to write)*",
+                _col_opts, index=_val_idx, key="su_col_value"
+            )
+        else:
+            su_col_value = st.text_input(
+                "Value Column *(header name or letter)*",
+                value=st.session_state.get("su_col_value", ""),
+                key="su_col_value"
+            )
+
+    st.divider()
+
+    # ── Target (output workbook) ──────────────────────────────────────────────
+    st.markdown("**Target File  *(multi-sheet workbook to update)*  ⚠️ this file will be modified in-place**")
+    su_tgt_file = st.selectbox("Target File", get_files(), key="su_tgt_file")
+
+    st.markdown("**Sheet Matching**")
+    st.caption(
+        "How the Category value from the master is matched to a sheet name in the target. "
+        "Example: category = `HDFC`, sheet name = `HDFC MF Report` → use *'Category value is contained in sheet name'*"
+    )
+    _sm_idx = int(st.session_state.get("su_sheet_match_idx", 0))
+    su_sheet_match_mode_label = st.selectbox(
+        "Match Mode",
+        SHEET_MATCH_LABELS,
+        index=_sm_idx,
+        key="su_sheet_match_mode_label",
+    )
+    su_sheet_match_mode = SHEET_MATCH_KEYS[SHEET_MATCH_LABELS.index(su_sheet_match_mode_label)]
+
+    st.divider()
+
+    # ── Target column configuration ───────────────────────────────────────────
+    st.markdown("**Target Sheet Columns**")
+    st.caption(
+        "These columns must exist in *every* matched target sheet "
+        "(use the same column header name across all sheets, or enter a letter like **A**, **B**)."
+    )
+    t1, t2, t3 = st.columns([3, 3, 1])
+    with t1:
+        su_tgt_col_lookup = st.text_input(
+            "Lookup Column *(search for Particulars here)*",
+            value=st.session_state.get("su_tgt_col_lookup", ""),
+            key="su_tgt_col_lookup",
+            placeholder="e.g.  Particulars  or  A",
+        )
+    with t2:
+        su_tgt_col_write = st.text_input(
+            "Write Column *(paste the Value here)*",
+            value=st.session_state.get("su_tgt_col_write", ""),
+            key="su_tgt_col_write",
+            placeholder="e.g.  Amount  or  C",
+        )
+    with t3:
+        su_tgt_header_row = st.number_input(
+            "Header Row",
+            min_value=1,
+            value=int(st.session_state.get("su_tgt_header_row", 1) or 1),
+            key="su_tgt_header_row",
+        )
+
+    su_case_sensitive = st.checkbox(
+        "Case-sensitive lookup",
+        value=bool(st.session_state.get("su_case_sensitive", False)),
+        key="su_case_sensitive",
+        help="When off (default), 'Revenue' and 'REVENUE' are treated as the same",
+    )
+
+    export = st.checkbox("Export after run", value=True, key="su_export")
+
+    # ── Save step ─────────────────────────────────────────────────────────────
+    if st.button("➕ Add Sheet Updater Step", type="primary", use_container_width=True):
+        # Validation
+        if not su_src_file:
+            st.error("Please select a Master File.")
+            return
+        if not su_src_sheet:
+            st.error("Please select a Master Sheet.")
+            return
+        if not su_col_category:
+            st.error("Please specify the Category column in the master.")
+            return
+        if not su_col_particulars:
+            st.error("Please specify the Particulars column in the master.")
+            return
+        if not su_col_value:
+            st.error("Please specify the Value column in the master.")
+            return
+        if not su_tgt_file:
+            st.error("Please select a Target File.")
+            return
+        if not su_tgt_col_lookup:
+            st.error("Please enter the Lookup Column in the target sheet.")
+            return
+        if not su_tgt_col_write:
+            st.error("Please enter the Write Column in the target sheet.")
+            return
+
+        _match_short = {
+            "cat_in_sheet": "cat⊂sheet",
+            "sheet_in_cat": "sheet⊂cat",
+            "starts_with":  "starts_with",
+            "ends_with":    "ends_with",
+            "exact":        "exact",
+        }.get(su_sheet_match_mode, su_sheet_match_mode)
+        _label = (
+            f"Sheet Updater  [{_match_short}]  "
+            f"{su_col_category}→sheet / {su_col_particulars}→row / {su_col_value}→{su_tgt_col_write}"
+        )
+
+        add_step("sheet_updater", _label, {
+            "src_file":           su_src_file,
+            "src_sheet":          su_src_sheet,
+            "src_col_category":   su_col_category,
+            "src_col_particulars":su_col_particulars,
+            "src_col_value":      su_col_value,
+            "tgt_file":           su_tgt_file,
+            "sheet_match_mode":   su_sheet_match_mode,
+            "tgt_col_lookup":     su_tgt_col_lookup,
+            "tgt_col_write":      su_tgt_col_write,
+            "tgt_header_row":     int(su_tgt_header_row),
+            "case_sensitive":     su_case_sensitive,
+            "export":             export,
+        })
+
+
 def render_add_files_form():
     """
     Workflow step: Add one or more files to the workflow.
@@ -6103,6 +6328,25 @@ def execute_step(step):
             fallback_lookups=fb_lookups,
         )
 
+    if step_type == "sheet_updater":
+        src_path, err = _resolve_required_path(cfg.get("src_file"), field="src_file")
+        if err: return False, err
+        _tgt_label = cfg.get("tgt_file")
+        _tgt_p = get_file_path(_tgt_label) if _tgt_label else ""
+        return run_sheet_updater_step(
+            src_file_path=src_path,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=_tgt_p or "",
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            tgt_col_lookup=cfg.get("tgt_col_lookup", ""),
+            tgt_col_write=cfg.get("tgt_col_write", ""),
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+            case_sensitive=bool(cfg.get("case_sensitive", False)),
+        )
+
     if step_type == "split_export":
         src_path, err = _resolve_required_path(cfg.get("src_file"), field="src_file")
         if err: return False, err
@@ -6839,6 +7083,25 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             on_missing_default=cfg.get("on_missing_default", 0),
         )
 
+    if step_type == "sheet_updater":
+        src_p = path_for(cfg.get("src_file"))
+        if not src_p:
+            return False, f"Source file not found: {cfg.get('src_file')}"
+        tgt_p = path_for(cfg.get("tgt_file")) or ""
+        return run_sheet_updater_step(
+            src_file_path=src_p,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=tgt_p,
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            tgt_col_lookup=cfg.get("tgt_col_lookup", ""),
+            tgt_col_write=cfg.get("tgt_col_write", ""),
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+            case_sensitive=bool(cfg.get("case_sensitive", False)),
+        )
+
     if step_type == "split_export":
         src_p = path_for(cfg.get("src_file"))
         if not src_p:
@@ -6898,6 +7161,8 @@ def _determine_modified_file_labels(step_type: str, cfg: dict) -> list[str]:
     """
     if step_type in ("add_files", "data_input", "input_source", "split_export"):
         return []   # split_export writes to new files, never modifies the source
+    if step_type == "sheet_updater":
+        return [cfg.get("tgt_file", "")]
     if step_type in ("import", "append", "header_map"):
         return [cfg.get("tgt_file", "")]
     if step_type == "vlookup"and (cfg.get("mode") == "explicit"or cfg.get("lookup_value_file")):
@@ -7472,6 +7737,9 @@ def add_step(step_type, name, config):
             if step_type == "split_export" and sheet_key == "tgt_sheet":
                 if config.get("split_mode", "single") != "single":
                     continue
+            # sheet_updater writes to dynamically matched sheets — no tgt_sheet dropdown
+            if step_type == "sheet_updater" and sheet_key == "tgt_sheet":
+                continue
             # pivot writes to a user-named sheet — sheet name is stored in tgt_sheet as a text field,
             # not a dropdown, so the Excel-label guard is irrelevant; skip to avoid false positives
             if step_type == "pivot" and sheet_key == "tgt_sheet":

@@ -104,6 +104,14 @@ from .split_export import (
     SPLIT_MODE_LABELS,
 )
 
+# Sheet Updater
+from .sheet_updater import (
+    run_sheet_updater_step,
+    SHEET_MATCH_MODES,
+    SHEET_MATCH_KEYS,
+    SHEET_MATCH_LABELS,
+)
+
 # Pivot Engine
 from .pivot_engine import (
     run_pivot_step,
@@ -201,6 +209,12 @@ __all__ = [
     'SPLIT_MODES',
     'SPLIT_MODE_KEYS',
     'SPLIT_MODE_LABELS',
+
+    # Sheet Updater
+    'run_sheet_updater_step',
+    'SHEET_MATCH_MODES',
+    'SHEET_MATCH_KEYS',
+    'SHEET_MATCH_LABELS',
 
     # Pivot Engine
     'run_pivot_step',

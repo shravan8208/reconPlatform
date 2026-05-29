@@ -139,6 +139,14 @@ OPERATION_REGISTRY = {
         "when_to_use": "When you need to distribute data into separate files or sheets by category — e.g. one file per client, one sheet per month",
         "difficulty": "standard",
     },
+    "sheet_updater": {
+        "user_label": "Sheet Updater",
+        "category": "Format & Report",
+        "icon": "system_update_alt",
+        "description": "Push values from a master sheet into a multi-sheet target workbook — match sheets by category name, find the right row by particulars, and write the value",
+        "when_to_use": "When you have a master list of (category, label, value) and need to update those values in matching sheets of an output file without overwriting anything else",
+        "difficulty": "standard",
+    },
     "format": {
         "user_label": "Format & Beautify",
         "category": "Format & Report",
