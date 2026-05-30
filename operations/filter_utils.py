@@ -26,6 +26,9 @@ OPERATORS = {
     "is_not_empty": "is not empty / blank",
     "in_list":      "in list  (comma-sep values)",
     "not_in_list":  "not in list  (comma-sep values)",
+    "date_before":  "date before  (DD-MM-YYYY)",
+    "date_after":   "date after   (DD-MM-YYYY)",
+    "date_on":      "date equals  (DD-MM-YYYY)",
 }
 
 # Operators that need a value input
@@ -33,6 +36,9 @@ NEEDS_VALUE = {k for k in OPERATORS if k not in ("is_empty", "is_not_empty")}
 
 # Operators that work on numbers; will try to coerce column to numeric
 NUMERIC_OPS = {"gt", "lt", "gte", "lte"}
+
+# Date operators
+DATE_OPS = {"date_before", "date_after", "date_on"}
 
 
 def _is_numeric_op(op: str) -> bool:
@@ -121,6 +127,19 @@ def _make_mask(df: pd.DataFrame, condition: dict) -> pd.Series:
             if op == "gte": return num_series >= num_val
             if op == "lte": return num_series <= num_val
         except ValueError:
+            return pd.Series([False] * len(df), index=df.index)
+
+    # ── Date operators ───────────────────────────────────────────────────────
+    if op in DATE_OPS:
+        try:
+            # Accept DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD
+            from dateutil import parser as _dparser
+            cmp_date = _dparser.parse(raw, dayfirst=True)
+            date_series = pd.to_datetime(series, errors="coerce", dayfirst=True)
+            if op == "date_before": return date_series < cmp_date
+            if op == "date_after":  return date_series > cmp_date
+            if op == "date_on":     return date_series.dt.date == cmp_date.date()
+        except Exception:
             return pd.Series([False] * len(df), index=df.index)
 
     # ── String operators ─────────────────────────────────────────────────────

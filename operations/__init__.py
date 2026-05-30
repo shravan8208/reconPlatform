@@ -30,6 +30,8 @@ from .data_manipulation import (
     run_delete_columns_step,
     run_clear_columns_data_step,
     run_delete_by_condition_step,
+    run_advanced_delete_step,
+    preview_advanced_delete,
 )
 
 # VLOOKUP operations
@@ -163,6 +165,8 @@ __all__ = [
     'run_insert_delete_step',
     'run_delete_columns_step',
     'run_clear_columns_data_step',
+    'run_advanced_delete_step',
+    'preview_advanced_delete',
     
     # VLOOKUP
     'vlookup_single',

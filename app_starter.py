@@ -94,8 +94,10 @@ from operations import (
     OPERATORS,
     NEEDS_VALUE,
 
-    # Delete by condition
+    # Delete by condition / Advanced Delete
     run_delete_by_condition_step,
+    run_advanced_delete_step,
+    preview_advanced_delete,
 
     # Format & Beautify
     run_format_step,
@@ -944,6 +946,28 @@ def populate_form_from_step(step_type: str, config: dict):
     if step_type == "delete":
         if "delete_cols"not in st.session_state:
             st.session_state.delete_cols = []
+        # Restore advanced delete state
+        if cfg.get("row_mode") == "advanced_condition":
+            from operations.filter_utils import OPERATORS as _ADV_OPS
+            _adv_op_keys   = list(_ADV_OPS.keys())
+            _adv_op_labels = list(_ADV_OPS.values())
+            st.session_state["adv_del_scope"]        = cfg.get("sheet_scope", "single")
+            st.session_state["adv_del_sheet"]        = cfg.get("sheet", "")
+            st.session_state["adv_del_selected_sheets"] = cfg.get("selected_sheets") or []
+            st.session_state["adv_del_include_sheets_raw"] = ", ".join(cfg.get("include_sheets") or [])
+            st.session_state["adv_del_exclude_sheets_raw"] = ", ".join(cfg.get("exclude_sheets") or [])
+            st.session_state["adv_del_header_row"]   = int(cfg.get("header_row", 1) or 1)
+            st.session_state["adv_del_combine"]      = cfg.get("filter_combine", "AND")
+            st.session_state["adv_del_save_log"]     = bool(cfg.get("save_log", True))
+            st.session_state["adv_del_log_path"]     = cfg.get("log_path", "")
+            _adv_filts = cfg.get("filters") or []
+            st.session_state["adv_del_n_conds"] = max(1, len(_adv_filts))
+            for _ai, _af in enumerate(_adv_filts):
+                st.session_state[f"adv_del_cond_{_ai}_col"] = _af.get("column", "")
+                _aop = _af.get("operator", "eq")
+                st.session_state[f"adv_del_cond_{_ai}_op"] = _aop
+                st.session_state[f"adv_del_cond_{_ai}_op_label"] = _adv_op_labels[_adv_op_keys.index(_aop)] if _aop in _adv_op_keys else _adv_op_labels[0]
+                st.session_state[f"adv_del_cond_{_ai}_val"] = _af.get("value", "")
         if str(cfg.get("axis", "")).lower() == "column"and cfg.get("columns"):
             st.session_state["delete_header_row"] = int(cfg.get("header_row", 1) or 1)
             st.session_state.delete_cols = list(cfg.get("columns") or [])
@@ -3864,6 +3888,254 @@ def render_insert_form():
         })
 
 
+def _render_advanced_delete_form(file: str, export):
+    """Advanced Delete sub-form — multi-sheet delete by condition with preview & log."""
+    from operations.filter_utils import OPERATORS as ADV_OPS, NEEDS_VALUE as ADV_NEEDS_VAL
+
+    ADV_OP_KEYS   = list(ADV_OPS.keys())
+    ADV_OP_LABELS = list(ADV_OPS.values())
+
+    st.markdown("---")
+    st.markdown("#### 🗑️ Advanced Delete")
+    st.caption(
+        "Define conditions and choose which sheets to scan. "
+        "A **preview** shows matching row counts before anything is deleted. "
+        "A **delete log** is saved automatically so you can review what was removed."
+    )
+
+    # ── Sheet scope ───────────────────────────────────────────────────────────
+    SCOPE_LABELS = ["Current Sheet Only", "Selected Sheets", "All Sheets in Workbook"]
+    SCOPE_KEYS   = ["single", "selected_sheets", "all_sheets"]
+    _ss_idx = SCOPE_KEYS.index(st.session_state.get("adv_del_scope", "single"))
+    _scope_lbl = st.radio(
+        "Apply to", SCOPE_LABELS, index=_ss_idx,
+        key="adv_del_scope_radio", horizontal=True,
+    )
+    adv_scope = SCOPE_KEYS[SCOPE_LABELS.index(_scope_lbl)]
+
+    adv_sheet        = ""
+    adv_sel_sheets   = []
+    adv_inc_sheets   = []
+    adv_exc_sheets   = []
+
+    if adv_scope == "single":
+        adv_sheet = sheet_selectbox("Sheet", file, key="adv_del_sheet")
+
+    elif adv_scope == "selected_sheets":
+        _fp_adv = get_file_path(file) if file else None
+        _all_sheets_adv = []
+        if _fp_adv:
+            try:
+                from core import wb_cache as _adv_wbc
+                _adv_wb = _adv_wbc.load(_fp_adv)
+                _all_sheets_adv = _adv_wb.sheetnames
+            except Exception:
+                pass
+        adv_sel_sheets = st.multiselect(
+            "Select Sheets to process",
+            options=_all_sheets_adv,
+            default=st.session_state.get("adv_del_selected_sheets", []),
+            key="adv_del_selected_sheets",
+        )
+
+    else:  # all_sheets
+        st.caption("All sheets will be processed. Optionally enter comma-separated names to **include** (only those) or **exclude** (skip those).")
+        _inc_raw = st.text_input(
+            "Include only *(comma-sep, blank = all)*",
+            value=st.session_state.get("adv_del_include_sheets_raw", ""),
+            key="adv_del_include_sheets_raw",
+            placeholder="Sheet1, Sheet2",
+        )
+        _exc_raw = st.text_input(
+            "Exclude *(comma-sep)*",
+            value=st.session_state.get("adv_del_exclude_sheets_raw", ""),
+            key="adv_del_exclude_sheets_raw",
+            placeholder="Summary, Template",
+        )
+        adv_inc_sheets = [s.strip() for s in _inc_raw.split(",") if s.strip()]
+        adv_exc_sheets = [s.strip() for s in _exc_raw.split(",") if s.strip()]
+
+    # ── Header row ────────────────────────────────────────────────────────────
+    adv_header_row = int(st.number_input(
+        "Header row", min_value=1,
+        value=int(st.session_state.get("adv_del_header_row", 1) or 1),
+        key="adv_del_header_row",
+    ))
+
+    # ── Condition builder ─────────────────────────────────────────────────────
+    # Resolve headers for the reference sheet (single or first selected)
+    _ref_sheet = adv_sheet or (adv_sel_sheets[0] if adv_sel_sheets else "")
+    _adv_row_headers = get_headers_for_file_sheet(file, _ref_sheet, adv_header_row) if _ref_sheet else []
+
+    st.markdown("**Conditions** — rows matching these conditions will be deleted")
+    st.caption(
+        "Supports: equals, contains, blank/not blank, greater/less than, date before/after/equal. "
+        "Use column header names or letters (A, B, C …)."
+    )
+
+    if "adv_del_n_conds" not in st.session_state:
+        st.session_state["adv_del_n_conds"] = 1
+    _ba, _br = st.columns([1, 1])
+    with _ba:
+        if st.button("Add Condition", key="adv_del_add_cond"):
+            st.session_state["adv_del_n_conds"] += 1
+    with _br:
+        if st.button("Remove Last", key="adv_del_rem_cond") and st.session_state["adv_del_n_conds"] > 1:
+            st.session_state["adv_del_n_conds"] -= 1
+
+    _n_conds = st.session_state["adv_del_n_conds"]
+
+    # AND / OR combine
+    adv_combine = st.radio(
+        "Combine conditions with",
+        ["AND", "OR"], index=0,
+        key="adv_del_combine", horizontal=True,
+        help="AND → row must match ALL conditions.  OR → row matches ANY condition.",
+    )
+
+    # Column / Operator / Value header
+    _hc = st.columns([3, 3, 3, 1])
+    for _lbl, _col in zip(["Column", "Condition", "Value", ""], _hc):
+        _col.markdown(f"**{_lbl}**")
+
+    adv_filters = []
+    for _i in range(_n_conds):
+        _rc = st.columns([3, 3, 3, 1])
+        if _adv_row_headers:
+            _saved_col = st.session_state.get(f"adv_del_cond_{_i}_col", "")
+            _col_opts  = [""] + _adv_row_headers
+            _col_idx   = _col_opts.index(_saved_col) if _saved_col in _col_opts else 0
+            _c_val = _rc[0].selectbox(
+                f"Col {_i+1}", _col_opts, index=_col_idx,
+                key=f"adv_del_cond_{_i}_col", label_visibility="collapsed",
+            )
+        else:
+            _c_val = _rc[0].text_input(
+                f"Col {_i+1}",
+                value=st.session_state.get(f"adv_del_cond_{_i}_col", ""),
+                key=f"adv_del_cond_{_i}_col", label_visibility="collapsed",
+                placeholder="Header or A/B/C",
+            )
+        _saved_op_key = st.session_state.get(f"adv_del_cond_{_i}_op", "eq")
+        _saved_op_idx = ADV_OP_KEYS.index(_saved_op_key) if _saved_op_key in ADV_OP_KEYS else 0
+        _op_lbl = _rc[1].selectbox(
+            f"Op {_i+1}", ADV_OP_LABELS, index=_saved_op_idx,
+            key=f"adv_del_cond_{_i}_op_label", label_visibility="collapsed",
+        )
+        _op_key     = ADV_OP_KEYS[ADV_OP_LABELS.index(_op_lbl)]
+        _needs_val  = _op_key in ADV_NEEDS_VAL
+        _date_hint  = _op_key in {"date_before", "date_after", "date_on"}
+        _v_val = _rc[2].text_input(
+            f"Val {_i+1}",
+            value=st.session_state.get(f"adv_del_cond_{_i}_val", ""),
+            key=f"adv_del_cond_{_i}_val", label_visibility="collapsed",
+            placeholder=("DD-MM-YYYY" if _date_hint else ("value" if _needs_val else "(not needed)")),
+            disabled=not _needs_val,
+        )
+        # Delete this condition row
+        if _n_conds > 1 and _rc[3].button("✕", key=f"adv_del_rem_{_i}"):
+            for _j in range(_i, _n_conds - 1):
+                st.session_state[f"adv_del_cond_{_j}_col"]      = st.session_state.get(f"adv_del_cond_{_j+1}_col", "")
+                st.session_state[f"adv_del_cond_{_j}_op"]       = st.session_state.get(f"adv_del_cond_{_j+1}_op", "eq")
+                st.session_state[f"adv_del_cond_{_j}_op_label"] = st.session_state.get(f"adv_del_cond_{_j+1}_op_label", ADV_OP_LABELS[0])
+                st.session_state[f"adv_del_cond_{_j}_val"]      = st.session_state.get(f"adv_del_cond_{_j+1}_val", "")
+            st.session_state["adv_del_n_conds"] -= 1
+            st.rerun()
+
+        if _c_val and _c_val.strip():
+            adv_filters.append({
+                "column":   _c_val.strip(),
+                "operator": _op_key,
+                "value":    _v_val.strip() if _needs_val else "",
+            })
+
+    # ── Log options ───────────────────────────────────────────────────────────
+    st.divider()
+    adv_save_log = st.checkbox(
+        "Save delete log  *(Excel file listing every deleted row)*",
+        value=bool(st.session_state.get("adv_del_save_log", True)),
+        key="adv_del_save_log",
+    )
+    adv_log_path = ""
+    if adv_save_log:
+        adv_log_path = st.text_input(
+            "Log file path *(leave blank for auto — saved in `delete_logs/` beside the source file)*",
+            value=st.session_state.get("adv_del_log_path", ""),
+            key="adv_del_log_path",
+            placeholder="e.g. /Users/me/logs/delete_log.xlsx",
+        )
+
+    # ── Preview ───────────────────────────────────────────────────────────────
+    st.divider()
+    if st.button("🔍 Preview — count matching rows", key="adv_del_preview"):
+        _fp = get_file_path(file) if file else None
+        if not _fp:
+            st.warning("Select a file first.")
+        elif not adv_filters:
+            st.warning("Add at least one condition.")
+        else:
+            with st.spinner("Scanning…"):
+                _prev = preview_advanced_delete(
+                    file_path=_fp,
+                    sheet_scope=adv_scope,
+                    sheet_name=adv_sheet,
+                    selected_sheets=adv_sel_sheets,
+                    include_sheets=adv_inc_sheets,
+                    exclude_sheets=adv_exc_sheets,
+                    filters=adv_filters,
+                    filter_combine=adv_combine,
+                    header_row=adv_header_row,
+                )
+            if _prev.get("error"):
+                st.error(f"Preview error: {_prev['error']}")
+            else:
+                _total = _prev["total"]
+                _by_sheet = _prev["by_sheet"]
+                _n_sheets = len([s for s, n in _by_sheet.items() if n > 0])
+                st.warning(
+                    f"⚠️  **{_total} matching row(s)** found across **{_n_sheets} sheet(s)**. "
+                    f"Adding this step will delete them permanently."
+                )
+                if _by_sheet:
+                    import pandas as _pd_prev
+                    _tbl = _pd_prev.DataFrame(
+                        [{"Sheet": s, "Matching Rows": n} for s, n in _by_sheet.items()]
+                    )
+                    st.dataframe(_tbl, use_container_width=True, hide_index=True)
+
+    # ── Add Step ──────────────────────────────────────────────────────────────
+    if st.button("➕ Add Advanced Delete Step", key="adv_del_add", type="primary"):
+        if not file:
+            st.error("Select a file.")
+            return
+        if not adv_filters:
+            st.error("Add at least one condition.")
+            return
+        if adv_scope == "selected_sheets" and not adv_sel_sheets:
+            st.error("Select at least one sheet.")
+            return
+
+        _scope_short = {"single": "1 sheet", "selected_sheets": f"{len(adv_sel_sheets)} sheets", "all_sheets": "all sheets"}.get(adv_scope, adv_scope)
+        _cond_short  = f"{len(adv_filters)} condition(s)"
+        _label       = f"Advanced Delete — {_cond_short}, {_scope_short}"
+
+        add_step("delete", _label, {
+            "file":             file,
+            "sheet":            adv_sheet or "",
+            "row_mode":         "advanced_condition",
+            "sheet_scope":      adv_scope,
+            "selected_sheets":  adv_sel_sheets,
+            "include_sheets":   adv_inc_sheets,
+            "exclude_sheets":   adv_exc_sheets,
+            "filters":          adv_filters,
+            "filter_combine":   adv_combine,
+            "header_row":       adv_header_row,
+            "save_log":         adv_save_log,
+            "log_path":         adv_log_path,
+            "export":           export,
+        })
+
+
 def render_delete_form():
     st.markdown('<div class="pkf-section">Delete Rows/Columns</div>', unsafe_allow_html=True)
     file = st.selectbox("File", get_files(), key="delete_file")
@@ -3874,7 +4146,7 @@ def render_delete_form():
     if axis == "Row":
         row_mode = st.radio(
             "Delete rows by",
-            ["Row number range", "Condition (delete rows where…)"],
+            ["Row number range", "Condition (delete rows where…)", "Advanced Delete *(multi-sheet + log)*"],
             key="delete_row_mode",
             horizontal=True,
         )
@@ -3901,6 +4173,10 @@ def render_delete_form():
                     "export": export,
                 })
             return  # early return — rest of form not needed
+
+        if row_mode == "Advanced Delete *(multi-sheet + log)*":
+            _render_advanced_delete_form(file, export)
+            return  # early return
 
         start_idx = st.number_input("Start Index", 1, value=1, key="delete_start")
         end_idx = end_index_input("End Index", key_prefix="delete_end", default_last=False, default_number=int(start_idx))
@@ -7111,6 +7387,21 @@ def execute_step(step):
             return ok, f"{msg} (saved to original: {file_path})"
         
         elif step_type == "delete":
+            if cfg.get("row_mode") == "advanced_condition":
+                ok, msg = run_advanced_delete_step(
+                    file_path=file_path,
+                    sheet_scope=cfg.get("sheet_scope", "single"),
+                    sheet_name=cfg.get("sheet", ""),
+                    selected_sheets=cfg.get("selected_sheets") or [],
+                    include_sheets=cfg.get("include_sheets") or [],
+                    exclude_sheets=cfg.get("exclude_sheets") or [],
+                    filters=cfg.get("filters") or [],
+                    filter_combine=cfg.get("filter_combine", "AND"),
+                    header_row=int(cfg.get("header_row", 1) or 1),
+                    save_log=bool(cfg.get("save_log", True)),
+                    log_path=cfg.get("log_path", ""),
+                )
+                return ok, f"{msg} (saved to original: {file_path})"
             if str(cfg.get("axis", "")).lower() == "column"and cfg.get("columns"):
                 if cfg.get("action") == "clear_data":
                     ok, msg = run_clear_columns_data_step(
@@ -7380,6 +7671,20 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
     if step_type == "insert":
         return run_insert_delete_step(file_path, cfg.get("sheet"), "insert", cfg.get("axis"), cfg.get("start"), cfg.get("end"))
     if step_type == "delete":
+        if cfg.get("row_mode") == "advanced_condition":
+            return run_advanced_delete_step(
+                file_path=file_path,
+                sheet_scope=cfg.get("sheet_scope", "single"),
+                sheet_name=cfg.get("sheet", ""),
+                selected_sheets=cfg.get("selected_sheets") or [],
+                include_sheets=cfg.get("include_sheets") or [],
+                exclude_sheets=cfg.get("exclude_sheets") or [],
+                filters=cfg.get("filters") or [],
+                filter_combine=cfg.get("filter_combine", "AND"),
+                header_row=int(cfg.get("header_row", 1) or 1),
+                save_log=bool(cfg.get("save_log", True)),
+                log_path=cfg.get("log_path", ""),
+            )
         if cfg.get("row_mode") == "condition":
             return run_delete_by_condition_step(
                 file_path, cfg.get("sheet"),

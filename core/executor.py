@@ -18,7 +18,7 @@ from operations import (
     run_conditional_write_step, run_sumifs_step,
     run_merge_cells_step, run_data_input_step, run_write_cell_step,
     run_input_source_step, run_normalize_import_step,
-    run_delete_by_condition_step, run_folder_summary_step,
+    run_delete_by_condition_step, run_advanced_delete_step, run_folder_summary_step,
     run_format_step,
     run_pivot_step,
     run_split_export_step,
@@ -296,6 +296,20 @@ def execute_step(step):
             cfg.get("axis"), cfg.get("start"), cfg.get("end"),
         )
     if step_type == "delete":
+        if cfg.get("row_mode") == "advanced_condition":
+            return run_advanced_delete_step(
+                file_path=file_path,
+                sheet_scope=cfg.get("sheet_scope", "single"),
+                sheet_name=cfg.get("sheet", ""),
+                selected_sheets=cfg.get("selected_sheets") or [],
+                include_sheets=cfg.get("include_sheets") or [],
+                exclude_sheets=cfg.get("exclude_sheets") or [],
+                filters=cfg.get("filters") or [],
+                filter_combine=cfg.get("filter_combine", "AND"),
+                header_row=int(cfg.get("header_row", 1) or 1),
+                save_log=bool(cfg.get("save_log", True)),
+                log_path=cfg.get("log_path", ""),
+            )
         if cfg.get("row_mode") == "condition":
             return run_delete_by_condition_step(
                 file_path, cfg.get("sheet"),
@@ -717,6 +731,20 @@ def execute_step_with_file_map(step, file_map):
     if step_type == "insert":
         return run_insert_delete_step(file_path, cfg.get("sheet"), "insert", cfg.get("axis"), cfg.get("start"), cfg.get("end"))
     if step_type == "delete":
+        if cfg.get("row_mode") == "advanced_condition":
+            return run_advanced_delete_step(
+                file_path=file_path,
+                sheet_scope=cfg.get("sheet_scope", "single"),
+                sheet_name=cfg.get("sheet", ""),
+                selected_sheets=cfg.get("selected_sheets") or [],
+                include_sheets=cfg.get("include_sheets") or [],
+                exclude_sheets=cfg.get("exclude_sheets") or [],
+                filters=cfg.get("filters") or [],
+                filter_combine=cfg.get("filter_combine", "AND"),
+                header_row=int(cfg.get("header_row", 1) or 1),
+                save_log=bool(cfg.get("save_log", True)),
+                log_path=cfg.get("log_path", ""),
+            )
         if cfg.get("row_mode") == "condition":
             return run_delete_by_condition_step(file_path, cfg.get("sheet"), filters=cfg.get("filters") or [], filter_combine=cfg.get("filter_combine", "AND"), header_row=int(cfg.get("header_row", 1) or 1))
         if str(cfg.get("axis", "")).lower() == "column" and cfg.get("columns"):
