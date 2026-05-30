@@ -595,6 +595,7 @@ def execute_step(step):
             tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
             tgt_col_value=cfg.get("tgt_col_value", ""),
             extra_col_map=cfg.get("extra_col_map") or [],
+            static_col_map=cfg.get("static_col_map") or [],
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             include_particulars=cfg.get("include_particulars") or [],
         )
@@ -979,6 +980,7 @@ def execute_step_with_file_map(step, file_map):
             tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
             tgt_col_value=cfg.get("tgt_col_value", ""),
             extra_col_map=cfg.get("extra_col_map") or [],
+            static_col_map=cfg.get("static_col_map") or [],
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             include_particulars=cfg.get("include_particulars") or [],
         )

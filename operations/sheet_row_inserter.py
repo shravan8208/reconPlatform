@@ -182,6 +182,7 @@ def run_sheet_row_inserter_step(
     tgt_col_particulars: str = "",
     tgt_col_value: str = "",
     extra_col_map: list = None,         # [{"src_col": "X", "tgt_col": "Y"}, ...]
+    static_col_map: list = None,        # [{"tgt_col": "F", "value": "sheet_insert_record"}, ...]
     tgt_header_row: int = 1,
     # Particulars filter
     include_particulars: list = None,   # if non-empty, only these Particulars are processed
@@ -208,6 +209,8 @@ def run_sheet_row_inserter_step(
     tgt_col_particulars : target column where the Particulars value is written
     tgt_col_value       : target column where the Value is written
     extra_col_map       : additional master→target column mappings
+    static_col_map      : fixed values written into every inserted row
+                          e.g. [{"tgt_col": "F", "value": "sheet_insert_record"}]
     tgt_header_row      : 1-based header row index in target sheets
     """
 
@@ -279,6 +282,14 @@ def run_sheet_row_inserter_step(
         if sc and tc:
             extra_maps_resolved.append((sc, tc))
 
+    # ── Collect static col map raw entries (resolved per-sheet inside the loop) ─
+    static_maps_raw: list[tuple] = []   # [(tgt_col_ref, static_value), ...]
+    for m in (static_col_map or []):
+        tc = m.get("tgt_col", "").strip()
+        sv = m.get("value", "")
+        if tc:
+            static_maps_raw.append((tc, sv))
+
     # ── Build insertion jobs ──────────────────────────────────────────────────
     # Group by category (and particulars when anchor_mode = "particulars")
     if anchor_mode == "particulars":
@@ -343,6 +354,18 @@ def run_sheet_row_inserter_step(
             idx = _resolve_col_idx(ws, tgt_col_ref)
             if idx:
                 extra_idx_map.append((idx, src_df_col))
+        static_idx_map: list[tuple[int, object]] = []   # (col_idx, static_value)
+        for tgt_col_ref, sv in static_maps_raw:
+            idx = _resolve_col_idx(ws, tgt_col_ref)
+            if idx:
+                # Try to cast static value to number so numeric statics stay numeric
+                try:
+                    sv_num = float(sv) if str(sv).strip() else sv
+                    if sv_num == int(sv_num):
+                        sv_num = int(sv_num)
+                    static_idx_map.append((idx, sv_num))
+                except (ValueError, TypeError):
+                    static_idx_map.append((idx, sv))
 
         # 7. Build row data list
         rows_data: list[dict] = []
@@ -365,6 +388,9 @@ def run_sheet_row_inserter_step(
                 v = master_row.get(sc)
                 if pd.notna(v):
                     row_data[ci] = v
+            # Write static values (these overwrite any dynamic value for the same col)
+            for ci, sv in static_idx_map:
+                row_data[ci] = sv
 
             rows_data.append(row_data)
 

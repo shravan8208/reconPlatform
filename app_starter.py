@@ -1245,6 +1245,11 @@ def populate_form_from_step(step_type: str, config: dict):
         st.session_state["sri_inc_parts_count"] = len(_inc_parts)
         for _i, _pv in enumerate(_inc_parts):
             st.session_state[f"sri_inc_part_{_i}"] = _pv
+        _static_cm = cfg.get("static_col_map") or []
+        st.session_state["sri_static_map_count"] = len(_static_cm)
+        for _i, _sm in enumerate(_static_cm):
+            st.session_state[f"sri_static_{_i}_tgt"] = _sm.get("tgt_col", "")
+            st.session_state[f"sri_static_{_i}_val"] = str(_sm.get("value", ""))
 
     # Special handling for sheet_updater
     if step_type == "sheet_updater":
@@ -6095,30 +6100,89 @@ def render_sheet_row_inserter_form():
             key="sri_tgt_header_row",
         )
 
-    # Extra column mappings
-    with st.expander("Additional column mappings *(optional)*", expanded=False):
-        _n_extra = int(st.session_state.get("sri_extra_map_count", 0))
-        if st.button("➕ Add Mapping", key="sri_extra_add"):
+    # ── Extra master column mappings ──────────────────────────────────────────
+    st.divider()
+    st.markdown("**Extra Master Columns  *(optional)***")
+    st.caption(
+        "Pull **additional columns from the master sheet** into the inserted rows. "
+        "For each mapping: pick which master column to read and which target column to write it into."
+    )
+    _n_extra = int(st.session_state.get("sri_extra_map_count", 0))
+    _xa, _xb = st.columns([1, 5])
+    with _xa:
+        if st.button("➕ Add Column", key="sri_extra_add"):
             st.session_state["sri_extra_map_count"] = _n_extra + 1
             st.rerun()
-        _n_extra = int(st.session_state.get("sri_extra_map_count", 0))
-        _extra_maps = []
-        for _i in range(_n_extra):
-            _ec = st.columns([4, 4, 1])
-            _s = _ec[0].text_input(f"Master col {_i+1}", value=st.session_state.get(f"sri_extra_{_i}_src", ""),
-                                   key=f"sri_extra_{_i}_src", placeholder="master header/letter",
-                                   label_visibility="collapsed")
-            _t = _ec[1].text_input(f"Target col {_i+1}", value=st.session_state.get(f"sri_extra_{_i}_tgt", ""),
-                                   key=f"sri_extra_{_i}_tgt", placeholder="target col letter/header",
-                                   label_visibility="collapsed")
-            if _ec[2].button("✕", key=f"sri_extra_del_{_i}"):
-                for _j in range(_i, _n_extra - 1):
-                    st.session_state[f"sri_extra_{_j}_src"] = st.session_state.get(f"sri_extra_{_j+1}_src", "")
-                    st.session_state[f"sri_extra_{_j}_tgt"] = st.session_state.get(f"sri_extra_{_j+1}_tgt", "")
-                st.session_state["sri_extra_map_count"] = _n_extra - 1
-                st.rerun()
-            if _s.strip() and _t.strip():
-                _extra_maps.append({"src_col": _s.strip(), "tgt_col": _t.strip()})
+    if _n_extra == 0:
+        st.caption("*(no extra columns — only Particulars and Value are written)*")
+    _n_extra = int(st.session_state.get("sri_extra_map_count", 0))
+    _extra_maps = []
+    for _i in range(_n_extra):
+        _ec = st.columns([1, 4, 4, 1])
+        _ec[0].markdown(f"<div style='padding-top:32px;font-size:0.85em;color:gray'>{_i+1}</div>",
+                        unsafe_allow_html=True)
+        _s = _ec[1].text_input(f"Master col {_i+1}", value=st.session_state.get(f"sri_extra_{_i}_src", ""),
+                               key=f"sri_extra_{_i}_src", placeholder="master header/letter",
+                               label_visibility="visible")
+        _t = _ec[2].text_input(f"→ Target col {_i+1}", value=st.session_state.get(f"sri_extra_{_i}_tgt", ""),
+                               key=f"sri_extra_{_i}_tgt", placeholder="target col letter/header",
+                               label_visibility="visible")
+        if _ec[3].button("✕", key=f"sri_extra_del_{_i}"):
+            for _j in range(_i, _n_extra - 1):
+                st.session_state[f"sri_extra_{_j}_src"] = st.session_state.get(f"sri_extra_{_j+1}_src", "")
+                st.session_state[f"sri_extra_{_j}_tgt"] = st.session_state.get(f"sri_extra_{_j+1}_tgt", "")
+            st.session_state["sri_extra_map_count"] = _n_extra - 1
+            st.rerun()
+        if _s.strip() and _t.strip():
+            _extra_maps.append({"src_col": _s.strip(), "tgt_col": _t.strip()})
+
+    # ── Static value columns ──────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**Static Value Columns  *(optional)***")
+    st.caption(
+        "Write a **fixed value** into a specific column on every inserted row — "
+        "regardless of what is in the master. "
+        "Example: write `sheet_insert_record` into column F so you can identify "
+        "these rows later."
+    )
+    if "sri_static_map_count" not in st.session_state:
+        st.session_state["sri_static_map_count"] = 0
+    _n_static = int(st.session_state.get("sri_static_map_count", 0))
+    _sa, _sb = st.columns([1, 5])
+    with _sa:
+        if st.button("➕ Add Static Column", key="sri_static_add"):
+            st.session_state["sri_static_map_count"] = _n_static + 1
+            st.rerun()
+    if _n_static == 0:
+        st.caption("*(no static columns defined)*")
+    _n_static = int(st.session_state.get("sri_static_map_count", 0))
+    sri_static_col_map = []
+    for _si in range(_n_static):
+        _sc = st.columns([1, 4, 4, 1])
+        _sc[0].markdown(f"<div style='padding-top:32px;font-size:0.85em;color:gray'>{_si+1}</div>",
+                        unsafe_allow_html=True)
+        _stgt = _sc[1].text_input(
+            f"Target col {_si+1}",
+            value=st.session_state.get(f"sri_static_{_si}_tgt", ""),
+            key=f"sri_static_{_si}_tgt",
+            placeholder="col letter/header  e.g. F",
+            label_visibility="visible",
+        )
+        _sval = _sc[2].text_input(
+            f"Value to write {_si+1}",
+            value=st.session_state.get(f"sri_static_{_si}_val", ""),
+            key=f"sri_static_{_si}_val",
+            placeholder="e.g.  sheet_insert_record",
+            label_visibility="visible",
+        )
+        if _sc[3].button("✕", key=f"sri_static_del_{_si}"):
+            for _sj in range(_si, _n_static - 1):
+                st.session_state[f"sri_static_{_sj}_tgt"] = st.session_state.get(f"sri_static_{_sj+1}_tgt", "")
+                st.session_state[f"sri_static_{_sj}_val"] = st.session_state.get(f"sri_static_{_sj+1}_val", "")
+            st.session_state["sri_static_map_count"] = _n_static - 1
+            st.rerun()
+        if _stgt.strip():
+            sri_static_col_map.append({"tgt_col": _stgt.strip(), "value": _sval})
 
     # ── Particulars filter ────────────────────────────────────────────────────
     st.divider()
@@ -6219,6 +6283,7 @@ def render_sheet_row_inserter_form():
             "tgt_col_particulars": sri_tgt_col_particulars,
             "tgt_col_value":       sri_tgt_col_value,
             "extra_col_map":       _extra_maps,
+            "static_col_map":      sri_static_col_map,
             "tgt_header_row":      int(sri_tgt_header_row),
             "include_particulars": sri_include_particulars,
             "export":              export,
@@ -7564,6 +7629,7 @@ def execute_step(step):
             tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
             tgt_col_value=cfg.get("tgt_col_value", ""),
             extra_col_map=cfg.get("extra_col_map") or [],
+            static_col_map=cfg.get("static_col_map") or [],
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             include_particulars=cfg.get("include_particulars") or [],
         )
@@ -8422,6 +8488,7 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
             tgt_col_value=cfg.get("tgt_col_value", ""),
             extra_col_map=cfg.get("extra_col_map") or [],
+            static_col_map=cfg.get("static_col_map") or [],
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             include_particulars=cfg.get("include_particulars") or [],
         )
