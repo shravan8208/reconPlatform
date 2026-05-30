@@ -114,6 +114,9 @@ from .sheet_updater import (
     SHEET_MATCH_MODES,
     SHEET_MATCH_KEYS,
     SHEET_MATCH_LABELS,
+    PARTICULARS_MATCH_MODES,
+    PARTICULARS_MATCH_KEYS,
+    PARTICULARS_MATCH_LABELS,
 )
 
 # Pivot Engine
@@ -223,6 +226,9 @@ __all__ = [
     'SHEET_MATCH_MODES',
     'SHEET_MATCH_KEYS',
     'SHEET_MATCH_LABELS',
+    'PARTICULARS_MATCH_MODES',
+    'PARTICULARS_MATCH_KEYS',
+    'PARTICULARS_MATCH_LABELS',
 
     # Pivot Engine
     'run_pivot_step',

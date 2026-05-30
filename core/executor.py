@@ -549,6 +549,8 @@ def execute_step(step):
             tgt_col_write=cfg.get("tgt_col_write", ""),
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             case_sensitive=bool(cfg.get("case_sensitive", False)),
+            particulars_match_mode=cfg.get("particulars_match_mode", "iexact"),
+            particulars_rules=cfg.get("particulars_rules") or [],
         )
 
     return False, f"Unknown operation: {step_type}"
@@ -890,6 +892,8 @@ def execute_step_with_file_map(step, file_map):
             tgt_col_write=cfg.get("tgt_col_write", ""),
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             case_sensitive=bool(cfg.get("case_sensitive", False)),
+            particulars_match_mode=cfg.get("particulars_match_mode", "iexact"),
+            particulars_rules=cfg.get("particulars_rules") or [],
         )
 
     if step_type == "split_export":

@@ -40,6 +40,19 @@ SHEET_MATCH_MODES: dict[str, str] = {
 SHEET_MATCH_KEYS:   list[str] = list(SHEET_MATCH_MODES.keys())
 SHEET_MATCH_LABELS: list[str] = list(SHEET_MATCH_MODES.values())
 
+# ---------------------------------------------------------------------------
+# Particulars match mode registry
+# ---------------------------------------------------------------------------
+
+PARTICULARS_MATCH_MODES: dict[str, str] = {
+    "iexact":     "Exact match (case-insensitive)",
+    "icontains":  "Contains (case-insensitive)",
+    "startswith": "Starts with (case-insensitive)",
+    "endswith":   "Ends with (case-insensitive)",
+}
+PARTICULARS_MATCH_KEYS:   list[str] = list(PARTICULARS_MATCH_MODES.keys())
+PARTICULARS_MATCH_LABELS: list[str] = list(PARTICULARS_MATCH_MODES.values())
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -66,6 +79,31 @@ def _match_sheet(category: str, sheet_names: list[str], mode: str) -> Optional[s
             if sn_lower in cat:
                 return sn
     return None
+
+
+def _match_particular(lookup_value: str, particular: str, mode: str) -> bool:
+    """
+    Compare a cell value from the target sheet's lookup column against
+    the particular label from the master, using the specified match mode.
+
+    mode:
+      iexact     — case-insensitive exact equality  (default)
+      icontains  — particular is a substring of lookup_value (case-insensitive)
+      startswith — lookup_value starts with particular (case-insensitive)
+      endswith   — lookup_value ends with particular (case-insensitive)
+    """
+    lv = str(lookup_value).strip().lower()
+    p  = str(particular).strip().lower()
+    if not lv or not p:
+        return False
+    if mode == "icontains":
+        return p in lv
+    elif mode == "startswith":
+        return lv.startswith(p)
+    elif mode == "endswith":
+        return lv.endswith(p)
+    else:  # iexact (default)
+        return lv == p
 
 
 def _resolve_col_idx(ws, col_ref: str) -> Optional[int]:
@@ -149,23 +187,32 @@ def run_sheet_updater_step(
     tgt_col_write: str = "",
     tgt_header_row: int = 1,
     case_sensitive: bool = False,
+    # ── Particulars matching ──────────────────────────────────────────────────
+    particulars_match_mode: str = "iexact",
+    particulars_rules: list = None,
 ) -> tuple[bool, str]:
     """
     Push values from a master sheet into a multi-sheet target workbook.
 
     Parameters
     ----------
-    src_file_path      : path to master workbook
-    src_sheet          : sheet in master (empty = first sheet)
-    src_col_category   : header/letter/index of the category column in master
-    src_col_particulars: header/letter/index of the particulars/lookup column in master
-    src_col_value      : header/letter/index of the value column in master
-    tgt_file           : path to target workbook (multiple sheets)
-    sheet_match_mode   : how to match category → sheet name
-    tgt_col_lookup     : column in target sheets to search for the particulars value
-    tgt_col_write      : column in target sheets to write the value into
-    tgt_header_row     : 1-based header row index in target sheets (default 1)
-    case_sensitive     : whether the particulars lookup is case-sensitive
+    src_file_path          : path to master workbook
+    src_sheet              : sheet in master (empty = first sheet)
+    src_col_category       : header/letter/index of the category column in master
+    src_col_particulars    : header/letter/index of the particulars/lookup column in master
+    src_col_value          : header/letter/index of the value column in master
+    tgt_file               : path to target workbook (multiple sheets)
+    sheet_match_mode       : how to match category → sheet name
+    tgt_col_lookup         : column in target sheets to search for the particulars value
+    tgt_col_write          : column in target sheets to write the value into
+    tgt_header_row         : 1-based header row index in target sheets (default 1)
+    case_sensitive         : kept for backward compat; use particulars_match_mode instead
+    particulars_match_mode : default match strategy for ALL particulars
+                             (iexact / icontains / startswith / endswith)
+    particulars_rules      : optional per-particular overrides, list of dicts:
+                             [{"particular": "Revenue", "match_mode": "icontains"}, ...]
+                             When a master particular matches a rule label (iexact),
+                             that rule's match_mode is used instead of the global default.
     """
 
     # ── Validation ────────────────────────────────────────────────────────────
@@ -260,16 +307,21 @@ def run_sheet_updater_step(
             skipped += 1
             continue
 
-        # 3. Search lookup column for the particulars value
-        part_cmp = particular if case_sensitive else particular.lower()
+        # 3. Determine effective match mode for this particular
+        _part_mode = particulars_match_mode or "iexact"
+        if particulars_rules:
+            for rule in particulars_rules:
+                if rule.get("particular", "").strip().lower() == particular.lower():
+                    _part_mode = rule.get("match_mode", _part_mode)
+                    break
+
+        # Search lookup column for the particulars value
         found_row = None
         for tgt_row in ws.iter_rows(min_row=tgt_header_row + 1):
             cell_val = tgt_row[lookup_idx - 1].value
             if cell_val is None:
                 continue
-            cv = str(cell_val).strip()
-            cv_cmp = cv if case_sensitive else cv.lower()
-            if cv_cmp == part_cmp:
+            if _match_particular(str(cell_val), particular, _part_mode):
                 found_row = tgt_row
                 break
 

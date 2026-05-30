@@ -121,6 +121,9 @@ from operations import (
     SHEET_MATCH_MODES,
     SHEET_MATCH_KEYS,
     SHEET_MATCH_LABELS,
+    PARTICULARS_MATCH_MODES,
+    PARTICULARS_MATCH_KEYS,
+    PARTICULARS_MATCH_LABELS,
 
     # Sheet Ops
     run_delete_sheets_step,
@@ -1179,6 +1182,16 @@ def populate_form_from_step(step_type: str, config: dict):
         st.session_state["su_tgt_col_write"]      = cfg.get("tgt_col_write", "")
         st.session_state["su_tgt_header_row"]     = int(cfg.get("tgt_header_row", 1) or 1)
         st.session_state["su_case_sensitive"]     = bool(cfg.get("case_sensitive", False))
+        # Particulars matching
+        _pm = cfg.get("particulars_match_mode", "iexact")
+        st.session_state["su_part_match_idx"]     = PARTICULARS_MATCH_KEYS.index(_pm) if _pm in PARTICULARS_MATCH_KEYS else 0
+        _rules = cfg.get("particulars_rules") or []
+        st.session_state["su_advanced_mode"]      = bool(_rules)
+        st.session_state["su_part_rules_count"]   = max(len(_rules), 1)
+        for _i, _r in enumerate(_rules):
+            st.session_state[f"su_part_rule_{_i}_particular"]  = _r.get("particular", "")
+            _rm = _r.get("match_mode", "iexact")
+            st.session_state[f"su_part_rule_{_i}_match_mode"]  = PARTICULARS_MATCH_KEYS.index(_rm) if _rm in PARTICULARS_MATCH_KEYS else 0
 
     # Special handling for add_files
     if step_type == "add_files":
@@ -5608,12 +5621,74 @@ def render_sheet_updater_form():
             key="su_tgt_header_row",
         )
 
-    su_case_sensitive = st.checkbox(
-        "Case-sensitive lookup",
-        value=bool(st.session_state.get("su_case_sensitive", False)),
-        key="su_case_sensitive",
-        help="When off (default), 'Revenue' and 'REVENUE' are treated as the same",
+    # ── Particulars matching ──────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**Particulars Matching**")
+    st.caption(
+        "Choose how Particulars values from the master are matched against the lookup column "
+        "in the target sheet. The default *(Exact match)* works for most cases. "
+        "Enable **Advanced Mode** to set a different match rule per particular."
     )
+
+    _pm_idx = int(st.session_state.get("su_part_match_idx", 0))
+    su_part_match_label = st.selectbox(
+        "Default Match Mode  *(applies to all particulars unless overridden below)*",
+        PARTICULARS_MATCH_LABELS,
+        index=_pm_idx,
+        key="su_part_match_mode_label",
+    )
+    su_particulars_match_mode = PARTICULARS_MATCH_KEYS[PARTICULARS_MATCH_LABELS.index(su_part_match_label)]
+
+    su_advanced_mode = st.toggle(
+        "Advanced Mode — set a match rule per particular",
+        value=bool(st.session_state.get("su_advanced_mode", False)),
+        key="su_advanced_mode",
+    )
+
+    su_particulars_rules = []
+    if su_advanced_mode:
+        st.caption(
+            "Add each Particular label and choose how it should be matched. "
+            "Rows left blank are ignored."
+        )
+        _n_rules = int(st.session_state.get("su_part_rules_count", 1))
+        rc1, rc2 = st.columns([1, 6])
+        with rc2:
+            if st.button("➕ Add Row", key="su_add_rule_row"):
+                st.session_state["su_part_rules_count"] = _n_rules + 1
+                st.rerun()
+        _n_rules = int(st.session_state.get("su_part_rules_count", 1))
+
+        for _i in range(_n_rules):
+            _cols = st.columns([4, 3, 1])
+            with _cols[0]:
+                _p = st.text_input(
+                    f"Particular #{_i + 1}",
+                    value=st.session_state.get(f"su_part_rule_{_i}_particular", ""),
+                    key=f"su_part_rule_{_i}_particular",
+                    placeholder="e.g. Revenue",
+                    label_visibility="collapsed",
+                )
+            with _cols[1]:
+                _rm_idx = int(st.session_state.get(f"su_part_rule_{_i}_match_mode", 0))
+                _rm_label = st.selectbox(
+                    f"Match #{_i + 1}",
+                    PARTICULARS_MATCH_LABELS,
+                    index=_rm_idx,
+                    key=f"su_part_rule_{_i}_match_mode_label",
+                    label_visibility="collapsed",
+                )
+                _rm_key = PARTICULARS_MATCH_KEYS[PARTICULARS_MATCH_LABELS.index(_rm_label)]
+            with _cols[2]:
+                if _n_rules > 1 and st.button("✕", key=f"su_del_rule_{_i}"):
+                    # Remove this rule by shifting remaining ones down
+                    for _j in range(_i, _n_rules - 1):
+                        st.session_state[f"su_part_rule_{_j}_particular"]  = st.session_state.get(f"su_part_rule_{_j+1}_particular", "")
+                        st.session_state[f"su_part_rule_{_j}_match_mode"]  = st.session_state.get(f"su_part_rule_{_j+1}_match_mode", 0)
+                    st.session_state["su_part_rules_count"] = _n_rules - 1
+                    st.rerun()
+            if _p.strip():
+                su_particulars_rules.append({"particular": _p.strip(), "match_mode": _rm_key})
 
     export = st.checkbox("Export after run", value=True, key="su_export")
 
@@ -5652,24 +5727,27 @@ def render_sheet_updater_form():
             "ends_with":    "ends_with",
             "exact":        "exact",
         }.get(su_sheet_match_mode, su_sheet_match_mode)
+        _pm_short = su_particulars_match_mode
         _label = (
-            f"Sheet Updater  [{_match_short}]  "
+            f"Sheet Updater  [{_match_short} / {_pm_short}]  "
             f"{su_col_category}→sheet / {su_col_particulars}→row / {su_col_value}→{su_tgt_col_write}"
         )
 
         add_step("sheet_updater", _label, {
-            "src_file":           su_src_file,
-            "src_sheet":          su_src_sheet,
-            "src_col_category":   su_col_category,
-            "src_col_particulars":su_col_particulars,
-            "src_col_value":      su_col_value,
-            "tgt_file":           su_tgt_file,
-            "sheet_match_mode":   su_sheet_match_mode,
-            "tgt_col_lookup":     su_tgt_col_lookup,
-            "tgt_col_write":      su_tgt_col_write,
-            "tgt_header_row":     int(su_tgt_header_row),
-            "case_sensitive":     su_case_sensitive,
-            "export":             export,
+            "src_file":              su_src_file,
+            "src_sheet":             su_src_sheet,
+            "src_col_category":      su_col_category,
+            "src_col_particulars":   su_col_particulars,
+            "src_col_value":         su_col_value,
+            "tgt_file":              su_tgt_file,
+            "sheet_match_mode":      su_sheet_match_mode,
+            "tgt_col_lookup":        su_tgt_col_lookup,
+            "tgt_col_write":         su_tgt_col_write,
+            "tgt_header_row":        int(su_tgt_header_row),
+            "case_sensitive":        False,
+            "particulars_match_mode":su_particulars_match_mode,
+            "particulars_rules":     su_particulars_rules,
+            "export":                export,
         })
 
 
@@ -6725,6 +6803,8 @@ def execute_step(step):
             tgt_col_write=cfg.get("tgt_col_write", ""),
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             case_sensitive=bool(cfg.get("case_sensitive", False)),
+            particulars_match_mode=cfg.get("particulars_match_mode", "iexact"),
+            particulars_rules=cfg.get("particulars_rules") or [],
         )
 
     if step_type == "split_export":
@@ -7515,6 +7595,8 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             tgt_col_write=cfg.get("tgt_col_write", ""),
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
             case_sensitive=bool(cfg.get("case_sensitive", False)),
+            particulars_match_mode=cfg.get("particulars_match_mode", "iexact"),
+            particulars_rules=cfg.get("particulars_rules") or [],
         )
 
     if step_type == "split_export":
