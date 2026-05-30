@@ -183,6 +183,54 @@ def _apply_rule(df: pd.DataFrame, rule: dict, col_mode: str, header_row: int):
     return rows_affected, summary
 
 
+# ── Internal: apply rules to one sheet ──────────────────────────────────────
+
+def _apply_rules_to_sheet(
+    wb,
+    sheet_name: str,
+    rule_list: list,
+    col_mode: str,
+    header_row: int,
+    file_path: str,
+) -> tuple[int, list[str], list[str]]:
+    """
+    Load the given sheet from the workbook, apply all rules, write back.
+    Returns (total_rows_affected, summaries, errors).
+    """
+    df = wb_cache.read_excel(
+        file_path,
+        sheet_name=sheet_name,
+        header=header_row - 1,
+    )
+    df.columns = [str(c).strip() for c in df.columns]
+
+    total_affected = 0
+    summaries: list[str] = []
+    errors: list[str] = []
+
+    for idx, rule in enumerate(rule_list, start=1):
+        try:
+            n, summary = _apply_rule(df, rule, col_mode, header_row)
+            total_affected += n
+            summaries.append(summary)
+        except Exception as exc:
+            errors.append(f"Rule {idx}: {exc}")
+
+    if total_affected > 0 or not errors:
+        # Write back even if 0 rows changed (rules may still be valid)
+        ws_pos = wb.sheetnames.index(sheet_name) if sheet_name in wb.sheetnames else len(wb.sheetnames)
+        if sheet_name in wb.sheetnames:
+            del wb[sheet_name]
+        ws = wb.create_sheet(sheet_name, ws_pos)
+        for r_idx, row in enumerate(
+            dataframe_to_rows(df, index=False, header=True), start=1
+        ):
+            for c_idx, value in enumerate(row, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+
+    return total_affected, summaries, errors
+
+
 # ── Main function ────────────────────────────────────────────────────────────
 
 def run_conditional_write_step(
@@ -196,6 +244,9 @@ def run_conditional_write_step(
     header_row: int     = 1,
     col_mode: str       = "letter",
     rules: list         = None,   # multi-rule list; overrides single-rule params when provided
+    scope: str          = "single",   # "single" or "all_sheets"
+    include_sheets: list = None,      # only process these sheets (all_sheets scope)
+    exclude_sheets: list = None,      # skip these sheets (all_sheets scope)
 ):
     """
     Apply one or more conditional-write rules to a sheet in a single pass.
@@ -207,14 +258,15 @@ def run_conditional_write_step(
     Single-rule mode (backward-compatible):
         Pass condition_col, condition_value, target_col, write_value, operator.
 
-    Both modes share: file_path, sheet_name, header_row, col_mode.
+    scope = "all_sheets":
+        Apply the same rule-set to every sheet in the workbook.
+        include_sheets / exclude_sheets let you restrict which sheets are processed.
     """
     try:
         # ── Normalise rules list ──────────────────────────────────────────────
         if rules:
             rule_list = [r for r in rules if r]
         else:
-            # Legacy single-rule → wrap in list
             rule_list = [{
                 "cond_col":   condition_col   or "",
                 "operator":   operator,
@@ -226,55 +278,60 @@ def run_conditional_write_step(
         if not rule_list:
             return False, "No rules defined."
 
-        # ── Load DataFrame ────────────────────────────────────────────────────
-        df = wb_cache.read_excel(
-            file_path,
-            sheet_name=sheet_name,
-            header=header_row - 1,
-        )
-        df.columns = [str(c).strip() for c in df.columns]
-
-        # ── Apply all rules sequentially ──────────────────────────────────────
-        total_affected = 0
-        summaries      = []
-        rule_errors    = []
-
-        for idx, rule in enumerate(rule_list, start=1):
-            try:
-                n, summary = _apply_rule(df, rule, col_mode, header_row)
-                total_affected += n
-                summaries.append(f"Rule {idx}: {summary}")
-            except Exception as re:
-                rule_errors.append(f"Rule {idx} error: {re}")
-
-        if rule_errors and not summaries:
-            return False, " | ".join(rule_errors)
-
-        # ── Write back ────────────────────────────────────────────────────────
         wb = wb_cache.load(file_path)
-        if sheet_name in wb.sheetnames:
-            ws_pos = wb.sheetnames.index(sheet_name)
-            del wb[sheet_name]
-            ws = wb.create_sheet(sheet_name, ws_pos)
-        else:
-            ws = wb.create_sheet(sheet_name)
 
-        for r_idx, row in enumerate(
-            dataframe_to_rows(df, index=False, header=True), start=1
-        ):
-            for c_idx, value in enumerate(row, start=1):
-                ws.cell(row=r_idx, column=c_idx, value=value)
+        # ── Resolve target sheets ─────────────────────────────────────────────
+        if scope == "all_sheets":
+            inc = [s.strip() for s in (include_sheets or []) if s and s.strip()]
+            exc = [s.strip().lower() for s in (exclude_sheets or []) if s and s.strip()]
+            if inc:
+                target_sheets = [s for s in wb.sheetnames if s in inc]
+            else:
+                target_sheets = [s for s in wb.sheetnames if s.strip().lower() not in exc]
+        else:
+            target_sheets = [sheet_name] if sheet_name else []
+
+        if not target_sheets:
+            return False, "No sheets to process."
+
+        # ── Process each sheet ────────────────────────────────────────────────
+        grand_total    = 0
+        all_summaries  = []
+        all_errors     = []
+
+        for sn in target_sheets:
+            try:
+                n, summaries, errors = _apply_rules_to_sheet(
+                    wb, sn, rule_list, col_mode, header_row, file_path
+                )
+                grand_total += n
+                prefix = f"[{sn}] " if scope == "all_sheets" else ""
+                for s in summaries:
+                    all_summaries.append(f"{prefix}{s}")
+                for e in errors:
+                    all_errors.append(f"{prefix}{e}")
+            except Exception as exc:
+                all_errors.append(f"[{sn}] {exc}")
+
+        if all_errors and not all_summaries:
+            return False, " | ".join(all_errors)
 
         wb_cache.save(wb, file_path)
         wb.close()
 
-        msg = (
-            f"Conditional write: {len(rule_list)} rule(s), "
-            f"{total_affected} total row(s) updated.\n"
-            + "\n".join(summaries)
+        sheet_label = (
+            f"{len(target_sheets)} sheet(s)"
+            if scope == "all_sheets"
+            else sheet_name
         )
-        if rule_errors:
-            msg += "\nWarnings: " + " | ".join(rule_errors)
+        msg = (
+            f"Conditional write: {len(rule_list)} rule(s) on {sheet_label}, "
+            f"{grand_total} total row(s) updated."
+        )
+        if all_summaries:
+            msg += "\n" + "\n".join(all_summaries)
+        if all_errors:
+            msg += "\nWarnings: " + " | ".join(all_errors)
 
         return True, msg
 

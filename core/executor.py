@@ -261,6 +261,9 @@ def execute_step(step):
             header_row=int(cfg.get("header_row", 1) or 1),
             col_mode=cfg.get("col_mode", "letter"),
             rules=cfg.get("rules") or None,
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
         )
     if step_type == "write_cell":
         return run_write_cell_step(
@@ -696,6 +699,9 @@ def execute_step_with_file_map(step, file_map):
             header_row=int(cfg.get("header_row", 1) or 1),
             col_mode=cfg.get("col_mode", "letter"),
             rules=cfg.get("rules") or None,
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
         )
     if step_type == "write_cell":
         return run_write_cell_step(file_path, cfg.get("sheet"), cfg.get("mode", "single_cell"), cfg.get("value", ""), cell_ref=cfg.get("cell_ref", ""), column=cfg.get("column", ""), start_row=int(cfg.get("start_row", 2)), end_row=cfg.get("end_row", "last"), header_row=int(cfg.get("header_row", 1)))

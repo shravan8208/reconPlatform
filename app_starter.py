@@ -969,6 +969,11 @@ def populate_form_from_step(step_type: str, config: dict):
         st.session_state["conditional_sheet"]      = cfg.get("sheet", "")
         st.session_state["conditional_col_mode"]   = cfg.get("col_mode", "letter")
         st.session_state["conditional_header_row"] = int(cfg.get("header_row", 1) or 1)
+        # Scope
+        _cscope = cfg.get("scope", "single")
+        st.session_state["conditional_scope"] = _cscope
+        st.session_state["conditional_include_sheets"] = ", ".join(cfg.get("include_sheets") or [])
+        st.session_state["conditional_exclude_sheets"] = ", ".join(cfg.get("exclude_sheets") or [])
 
         # Normalise to rules list (handle both old single-rule and new multi-rule configs)
         rules = cfg.get("rules")
@@ -1760,8 +1765,50 @@ def render_conditional_form():
         "value into a target column for every matching row — all applied in a single pass."
     )
 
-    file  = st.selectbox("File",  get_files(), key="conditional_file")
-    sheet = sheet_selectbox("Sheet", file, key="conditional_sheet")
+    file = st.selectbox("File", get_files(), key="conditional_file")
+
+    # ── Scope: single sheet vs all sheets ────────────────────────────────────
+    SCOPE_OPTS = ["Single Sheet", "All Sheets in Workbook"]
+    SCOPE_KEYS = ["single", "all_sheets"]
+    _saved_scope = st.session_state.get("conditional_scope", "single")
+    _saved_scope_i = SCOPE_KEYS.index(_saved_scope) if _saved_scope in SCOPE_KEYS else 0
+    _scope_label = st.radio(
+        "Apply to",
+        SCOPE_OPTS, index=_saved_scope_i,
+        key="conditional_scope_radio", horizontal=True,
+        help=(
+            "**Single Sheet** — apply rules to one sheet (classic behaviour).\n\n"
+            "**All Sheets** — run the same rules on every sheet in the workbook. "
+            "Optionally restrict which sheets are processed with include/exclude filters."
+        ),
+    )
+    cond_scope = SCOPE_KEYS[SCOPE_OPTS.index(_scope_label)]
+
+    if cond_scope == "single":
+        sheet = sheet_selectbox("Sheet", file, key="conditional_sheet")
+        cond_include_sheets = []
+        cond_exclude_sheets = []
+    else:
+        sheet = None  # not used for all_sheets
+        st.caption(
+            "All sheets will be processed. "
+            "Optionally enter comma-separated sheet names to **include** (only those) "
+            "or **exclude** (skip those)."
+        )
+        _inc_raw = st.text_input(
+            "Include only these sheets *(comma-separated, leave blank for all)*",
+            value=st.session_state.get("conditional_include_sheets", ""),
+            key="conditional_include_sheets",
+            placeholder="e.g. Sheet1, Sheet2",
+        )
+        _exc_raw = st.text_input(
+            "Exclude these sheets *(comma-separated)*",
+            value=st.session_state.get("conditional_exclude_sheets", ""),
+            key="conditional_exclude_sheets",
+            placeholder="e.g. Summary, Template",
+        )
+        cond_include_sheets = [s.strip() for s in _inc_raw.split(",") if s.strip()]
+        cond_exclude_sheets = [s.strip() for s in _exc_raw.split(",") if s.strip()]
 
     st.divider()
 
@@ -1915,21 +1962,25 @@ def render_conditional_form():
             return
 
         # Build human-readable step label
+        _sheet_label = sheet if cond_scope == "single" else "all sheets"
         if len(rules) == 1:
             r = rules[0]
             op_d   = OPERATORS.get(r["operator"], r["operator"])
             val_p  = "" if r["operator"] in NO_VALUE_OPERATORS else f" '{r['cond_val']}'"
-            label  = f"If [{r['cond_col']}] {op_d}{val_p}  →  [{r['target_col']}] = '{r['write_val']}'"
+            label  = f"If [{r['cond_col']}] {op_d}{val_p}  →  [{r['target_col']}] = '{r['write_val']}' ({_sheet_label})"
         else:
-            label = f"Conditional Write — {len(rules)} rules on {sheet}"
+            label = f"Conditional Write — {len(rules)} rules on {_sheet_label}"
 
         add_step("conditional", label, {
-            "file":       file,
-            "sheet":      sheet,
-            "col_mode":   col_mode,
-            "header_row": int(header_row),
-            "rules":      rules,
-            "export":     export,
+            "file":            file,
+            "sheet":           sheet or "",
+            "col_mode":        col_mode,
+            "header_row":      int(header_row),
+            "rules":           rules,
+            "scope":           cond_scope,
+            "include_sheets":  cond_include_sheets,
+            "exclude_sheets":  cond_exclude_sheets,
+            "export":          export,
         })
 
 
@@ -6899,6 +6950,9 @@ def execute_step(step):
                 header_row=int(cfg.get("header_row", 1) or 1),
                 col_mode=cfg.get("col_mode", "letter"),
                 rules=cfg.get("rules") or None,
+                scope=cfg.get("scope", "single"),
+                include_sheets=cfg.get("include_sheets") or [],
+                exclude_sheets=cfg.get("exclude_sheets") or [],
             )
             return ok, f"{msg} (saved to original: {file_path})"
 
@@ -7293,6 +7347,9 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             header_row=int(cfg.get("header_row", 1) or 1),
             col_mode=cfg.get("col_mode", "letter"),
             rules=cfg.get("rules") or None,
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
         )
     if step_type == "write_cell":
         return run_write_cell_step(
