@@ -273,6 +273,9 @@ def execute_step(step):
             start_row=int(cfg.get("start_row", 2)),
             end_row=cfg.get("end_row", "last"),
             header_row=int(cfg.get("header_row", 1)),
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
         )
     if step_type == "filter":
         return run_filter_step(
@@ -718,7 +721,7 @@ def execute_step_with_file_map(step, file_map):
             exclude_sheets=cfg.get("exclude_sheets") or [],
         )
     if step_type == "write_cell":
-        return run_write_cell_step(file_path, cfg.get("sheet"), cfg.get("mode", "single_cell"), cfg.get("value", ""), cell_ref=cfg.get("cell_ref", ""), column=cfg.get("column", ""), start_row=int(cfg.get("start_row", 2)), end_row=cfg.get("end_row", "last"), header_row=int(cfg.get("header_row", 1)))
+        return run_write_cell_step(file_path, cfg.get("sheet"), cfg.get("mode", "single_cell"), cfg.get("value", ""), cell_ref=cfg.get("cell_ref", ""), column=cfg.get("column", ""), start_row=int(cfg.get("start_row", 2)), end_row=cfg.get("end_row", "last"), header_row=int(cfg.get("header_row", 1)), scope=cfg.get("scope", "single"), include_sheets=cfg.get("include_sheets") or [], exclude_sheets=cfg.get("exclude_sheets") or [])
     if step_type == "filter":
         return run_filter_step(file_path, cfg.get("sheet"), cfg.get("column"), cfg.get("value"), remove_empty=bool(cfg.get("remove_empty", False)), header_row=int(cfg.get("header_row", 1) or 1))
     if step_type == "sort":

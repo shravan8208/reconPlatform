@@ -1197,6 +1197,14 @@ def populate_form_from_step(step_type: str, config: dict):
         st.session_state["fb_exclude_sheets"] = cfg.get("exclude_sheets", "")
         st.session_state["fb_sheet_name"]     = cfg.get("sheet_name", "")
 
+    # Special handling for write_cell (scope / include / exclude)
+    if step_type == "write_cell":
+        st.session_state["write_cell_scope"]          = cfg.get("scope", "single")
+        st.session_state["write_cell_include_sheets"] = ", ".join(cfg.get("include_sheets") or [])
+        st.session_state["write_cell_exclude_sheets"] = ", ".join(cfg.get("exclude_sheets") or [])
+        st.session_state["write_cell_ref"]            = cfg.get("cell_ref", "A1")
+        st.session_state["write_cell_column"]         = cfg.get("column", "A")
+
     # Special handling for sheet_updater
     if step_type == "sheet_updater":
         st.session_state["su_src_file"]           = cfg.get("src_file", "")
@@ -2707,52 +2715,133 @@ def _pivot_apply_template(tpl: dict):
 def render_write_cell_form():
     st.markdown('<div class="pkf-section">Write to Cell(s)</div>', unsafe_allow_html=True)
     st.caption("Write a value to a specific cell OR fill an entire column with the same value.")
-    
+
     file = st.selectbox("File", get_files(), key="write_cell_file")
-    sheet = sheet_selectbox("Sheet", file, key="write_cell_sheet")
-    
+
+    # ── Scope ──────────────────────────────────────────────────────────────────
+    SCOPE_LABELS = ["Single Sheet", "All Sheets in Workbook"]
+    SCOPE_KEYS   = ["single", "all_sheets"]
+    _wc_scope_i  = SCOPE_KEYS.index(st.session_state.get("write_cell_scope", "single"))
+    _wc_scope_lbl = st.radio(
+        "Write to",
+        SCOPE_LABELS, index=_wc_scope_i,
+        key="write_cell_scope_radio", horizontal=True,
+        help=(
+            "**Single Sheet** — write to one sheet (classic).\n\n"
+            "**All Sheets** — write the same cell/column into every sheet in the workbook. "
+            "Optionally restrict which sheets are included."
+        ),
+    )
+    wc_scope = SCOPE_KEYS[SCOPE_LABELS.index(_wc_scope_lbl)]
+
+    if wc_scope == "single":
+        sheet = sheet_selectbox("Sheet", file, key="write_cell_sheet")
+        wc_include_sheets = []
+        wc_exclude_sheets = []
+    else:
+        sheet = None
+        st.caption(
+            "All sheets will be updated. "
+            "Optionally enter comma-separated sheet names to **include** (only those) "
+            "or **exclude** (skip those)."
+        )
+        _wc_inc = st.text_input(
+            "Include only *(comma-sep, blank = all)*",
+            value=st.session_state.get("write_cell_include_sheets", ""),
+            key="write_cell_include_sheets",
+            placeholder="Sheet1, Sheet2",
+        )
+        _wc_exc = st.text_input(
+            "Exclude *(comma-sep)*",
+            value=st.session_state.get("write_cell_exclude_sheets", ""),
+            key="write_cell_exclude_sheets",
+            placeholder="Summary, Template",
+        )
+        wc_include_sheets = [s.strip() for s in _wc_inc.split(",") if s.strip()]
+        wc_exclude_sheets = [s.strip() for s in _wc_exc.split(",") if s.strip()]
+
+    st.divider()
+
     mode = st.radio(
         "Mode",
         ["Single Cell", "Column (same value for all rows)"],
         key="write_cell_mode",
-        horizontal=True
+        horizontal=True,
     )
-    
+
     value = st.text_input("Value to write", "", key="write_cell_value")
-    
+
     if mode == "Single Cell":
-        cell_ref = st.text_input("Cell Reference (e.g., A5, B10)", "A1", key="write_cell_ref")
+        cell_ref = st.text_input(
+            "Cell Reference *(e.g., A5, B10)*",
+            value=st.session_state.get("write_cell_ref", "A1"),
+            key="write_cell_ref",
+        )
         column = ""
         start_row = 2
         end_row = "last"
         header_row = 1
+        if wc_scope == "all_sheets":
+            st.caption(
+                f"📝  Cell **{cell_ref or '…'}** will be written with `{value or '…'}` "
+                f"in every target sheet."
+            )
     else:
         cell_ref = ""
-        column = st.text_input("Column Letter (e.g., A, B, C)", "A", key="write_cell_column")
+        column = st.text_input(
+            "Column Letter *(e.g., A, B, C)*",
+            value=st.session_state.get("write_cell_column", "A"),
+            key="write_cell_column",
+        )
         header_row = st.number_input("Header Row", min_value=1, value=1, key="write_cell_header")
         start_row = st.number_input("Start Row", min_value=1, value=2, key="write_cell_start")
         end_row = end_row_input("End Row", key_prefix="write_cell_end", default_last=True, default_number=100)
-    
+        if wc_scope == "all_sheets":
+            st.caption(
+                f"📝  Column **{column or '…'}** rows {start_row}–{end_row if end_row != 'last' else 'last'} "
+                f"will be filled with `{value or '…'}` in every target sheet."
+            )
+
     export = export_options_ui("write_cell")
-    
+
     if st.button("Add Step", key="write_cell_add"):
-        mode_key = "single_cell"if mode == "Single Cell"else "column"
-        if mode == "Single Cell":
-            step_name = f"Write '{value}'to cell {cell_ref}"
+        if not file:
+            st.error("Select a file.")
+            return
+        mode_key = "single_cell" if mode == "Single Cell" else "column"
+
+        if wc_scope == "all_sheets":
+            _scope_label = "all sheets"
+            if wc_include_sheets:
+                _scope_label = f"{len(wc_include_sheets)} sheet(s)"
         else:
-            step_name = f"Write '{value}'to column {column}"
-        
+            _scope_label = sheet or "(active)"
+
+        if mode == "Single Cell":
+            if not cell_ref:
+                st.error("Enter a cell reference (e.g. A5).")
+                return
+            step_name = f"Write '{value}' → {cell_ref} ({_scope_label})"
+        else:
+            if not column:
+                st.error("Enter a column letter.")
+                return
+            step_name = f"Write '{value}' → col {column} ({_scope_label})"
+
         add_step("write_cell", step_name, {
-            "file": file,
-            "sheet": sheet,
-            "mode": mode_key,
-            "value": value,
-            "cell_ref": cell_ref,
-            "column": column,
-            "start_row": int(start_row),
-            "end_row": end_row,
-            "header_row": int(header_row),
-            "export": export,
+            "file":           file,
+            "sheet":          sheet or "",
+            "mode":           mode_key,
+            "value":          value,
+            "cell_ref":       cell_ref,
+            "column":         column,
+            "start_row":      int(start_row),
+            "end_row":        end_row,
+            "header_row":     int(header_row),
+            "scope":          wc_scope,
+            "include_sheets": wc_include_sheets,
+            "exclude_sheets": wc_exclude_sheets,
+            "export":         export,
         })
 
 
@@ -7243,6 +7332,9 @@ def execute_step(step):
                 start_row=int(cfg.get('start_row', 2)),
                 end_row=cfg.get('end_row', 'last'),
                 header_row=int(cfg.get('header_row', 1)),
+                scope=cfg.get('scope', 'single'),
+                include_sheets=cfg.get('include_sheets') or [],
+                exclude_sheets=cfg.get('exclude_sheets') or [],
             )
             return ok, f"{msg} (saved to original: {file_path})"
         
@@ -7648,6 +7740,9 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             cell_ref=cfg.get("cell_ref", ""), column=cfg.get("column", ""),
             start_row=int(cfg.get("start_row", 2)), end_row=cfg.get("end_row", "last"),
             header_row=int(cfg.get("header_row", 1)),
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
         )
     if step_type == "filter":
         return run_filter_step(
