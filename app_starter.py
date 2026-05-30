@@ -1241,6 +1241,10 @@ def populate_form_from_step(step_type: str, config: dict):
         for _i, _m in enumerate(_ecm):
             st.session_state[f"sri_extra_{_i}_src"] = _m.get("src_col", "")
             st.session_state[f"sri_extra_{_i}_tgt"] = _m.get("tgt_col", "")
+        _inc_parts = cfg.get("include_particulars") or []
+        st.session_state["sri_inc_parts_count"] = len(_inc_parts)
+        for _i, _pv in enumerate(_inc_parts):
+            st.session_state[f"sri_inc_part_{_i}"] = _pv
 
     # Special handling for sheet_updater
     if step_type == "sheet_updater":
@@ -6116,6 +6120,45 @@ def render_sheet_row_inserter_form():
             if _s.strip() and _t.strip():
                 _extra_maps.append({"src_col": _s.strip(), "tgt_col": _t.strip()})
 
+    # ── Particulars filter ────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**Filter Particulars  *(optional)***")
+    st.caption(
+        "By default **all** Particulars in the master are inserted. "
+        "To insert only specific ones, add them below — only those rows will be processed, "
+        "everything else in the master is ignored."
+    )
+
+    if "sri_inc_parts_count" not in st.session_state:
+        st.session_state["sri_inc_parts_count"] = 0
+
+    _n_parts = int(st.session_state.get("sri_inc_parts_count", 0))
+    _pa, _pb = st.columns([1, 5])
+    with _pa:
+        if st.button("➕ Add Particular", key="sri_inc_part_add"):
+            st.session_state["sri_inc_parts_count"] = _n_parts + 1
+            st.rerun()
+    if _n_parts == 0:
+        st.caption("*(no filter — all Particulars will be inserted)*")
+
+    sri_include_particulars = []
+    for _pi in range(_n_parts):
+        _pr = st.columns([8, 1])
+        _pv = _pr[0].text_input(
+            f"Particular {_pi + 1}",
+            value=st.session_state.get(f"sri_inc_part_{_pi}", ""),
+            key=f"sri_inc_part_{_pi}",
+            placeholder="e.g.  REFUNDS  or  CROSS CREDITS",
+            label_visibility="collapsed",
+        )
+        if _pr[1].button("✕", key=f"sri_inc_part_del_{_pi}"):
+            for _pj in range(_pi, _n_parts - 1):
+                st.session_state[f"sri_inc_part_{_pj}"] = st.session_state.get(f"sri_inc_part_{_pj+1}", "")
+            st.session_state["sri_inc_parts_count"] = _n_parts - 1
+            st.rerun()
+        if _pv.strip():
+            sri_include_particulars.append(_pv.strip())
+
     export = st.checkbox("Export after run", value=True, key="sri_export")
 
     # ── Add Step ──────────────────────────────────────────────────────────────
@@ -6150,9 +6193,14 @@ def render_sheet_row_inserter_form():
             "before_last":  "before-last",
         }.get(sri_insert_position, sri_insert_position)
         _anchor_desc = f"'{sri_anchor_value}'" if sri_anchor_mode == "fixed" else "by-particulars"
+        _filter_suffix = (
+            f"  [filter: {len(sri_include_particulars)} particular(s)]"
+            if sri_include_particulars else ""
+        )
         _label = (
             f"Row Inserter  [{_anchor_desc} {_pos_short}]  "
             f"{sri_col_category}→sheet / insert {sri_col_particulars}+{sri_col_value}"
+            f"{_filter_suffix}"
         )
 
         add_step("sheet_row_inserter", _label, {
@@ -6172,6 +6220,7 @@ def render_sheet_row_inserter_form():
             "tgt_col_value":       sri_tgt_col_value,
             "extra_col_map":       _extra_maps,
             "tgt_header_row":      int(sri_tgt_header_row),
+            "include_particulars": sri_include_particulars,
             "export":              export,
         })
 
@@ -7516,6 +7565,7 @@ def execute_step(step):
             tgt_col_value=cfg.get("tgt_col_value", ""),
             extra_col_map=cfg.get("extra_col_map") or [],
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+            include_particulars=cfg.get("include_particulars") or [],
         )
 
     if step_type == "split_export":
@@ -8373,6 +8423,7 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             tgt_col_value=cfg.get("tgt_col_value", ""),
             extra_col_map=cfg.get("extra_col_map") or [],
             tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+            include_particulars=cfg.get("include_particulars") or [],
         )
 
     if step_type == "split_export":

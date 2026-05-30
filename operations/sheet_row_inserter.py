@@ -183,6 +183,8 @@ def run_sheet_row_inserter_step(
     tgt_col_value: str = "",
     extra_col_map: list = None,         # [{"src_col": "X", "tgt_col": "Y"}, ...]
     tgt_header_row: int = 1,
+    # Particulars filter
+    include_particulars: list = None,   # if non-empty, only these Particulars are processed
 ) -> tuple[bool, str]:
     """
     Insert rows from a master sheet into matching sheets of a target workbook.
@@ -250,6 +252,16 @@ def run_sheet_row_inserter_step(
     df = df.dropna(subset=[cat_col, part_col], how="all")
     if df.empty:
         return False, "Master sheet has no data rows."
+
+    # ── Filter to selected Particulars only ───────────────────────────────────
+    if include_particulars:
+        _inc_lower = {str(p).strip().lower() for p in include_particulars if str(p).strip()}
+        df = df[df[part_col].apply(lambda v: str(v).strip().lower() in _inc_lower)]
+        if df.empty:
+            return False, (
+                f"No master rows match the selected Particulars filter: "
+                f"{include_particulars}"
+            )
 
     # ── Load target workbook ──────────────────────────────────────────────────
     try:
