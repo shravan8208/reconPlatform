@@ -8672,7 +8672,17 @@ def add_step(step_type, name, config):
                 st.warning(f"Please select {k.replace('_', ' ')}.")
                 return
         # Enforce sheet dropdown selection for Excel files (no default Sheet1)
-        if "file"in config and "sheet"in config and _is_excel_label(config.get("file")) and not config.get("sheet"):
+        # Skip when the operation explicitly targets multiple sheets (no single sheet needed)
+        _skip_sheet_check = (
+            # Advanced Delete running on selected/all sheets
+            (step_type == "delete" and config.get("row_mode") == "advanced_condition"
+             and config.get("sheet_scope", "single") != "single")
+            # Write Cell writing across all sheets
+            or (step_type == "write_cell" and config.get("scope", "single") == "all_sheets")
+            # Conditional Write across all sheets
+            or (step_type == "conditional" and config.get("scope", "single") == "all_sheets")
+        )
+        if not _skip_sheet_check and "file"in config and "sheet"in config and _is_excel_label(config.get("file")) and not config.get("sheet"):
             st.warning("Please select a sheet (dropdown) for the chosen Excel file.")
             return
         # SUMIFS source sheet must also be chosen when source file is excel
