@@ -23,6 +23,7 @@ from operations import (
     run_pivot_step,
     run_split_export_step,
     run_sheet_updater_step,
+    run_unpivot_step,
     run_delete_sheets_step,
 )
 from ui.components import (
@@ -512,6 +513,25 @@ def execute_step(step):
             header_font_color=cfg.get("header_font_color", "FFFFFF"),
         )
 
+    if step_type == "unpivot":
+        src_path, err = _resolve(cfg.get("src_file"), "src_file")
+        if err: return False, err
+        tgt_label = cfg.get("tgt_file")
+        tgt_path = get_file_path(tgt_label) if tgt_label else ""
+        return run_unpivot_step(
+            src_file_path=src_path,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_header_row=int(cfg.get("src_header_row", 1) or 1),
+            id_cols=cfg.get("id_cols") or [],
+            value_cols=cfg.get("value_cols") or [],
+            var_name=cfg.get("var_name", "Category"),
+            value_name=cfg.get("value_name", "Value"),
+            tgt_file=tgt_path or "",
+            tgt_sheet=cfg.get("tgt_sheet", "Unpivot"),
+            append_mode=bool(cfg.get("append_mode", False)),
+            drop_na=bool(cfg.get("drop_na", True)),
+        )
+
     if step_type == "sheet_updater":
         src_path, err = _resolve(cfg.get("src_file"), "src_file")
         if err: return False, err
@@ -834,6 +854,24 @@ def execute_step_with_file_map(step, file_map):
             include_status_col=bool(cfg.get("include_status_col", True)),
             status_col_name=cfg.get("status_col_name", "Status"),
             on_missing_default=cfg.get("on_missing_default", 0),
+        )
+
+    if step_type == "unpivot":
+        src_p = path_for(cfg.get("src_file"))
+        if not src_p: return False, f"Source file not found: {cfg.get('src_file')}"
+        tgt_p = path_for(cfg.get("tgt_file")) or ""
+        return run_unpivot_step(
+            src_file_path=src_p,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_header_row=int(cfg.get("src_header_row", 1) or 1),
+            id_cols=cfg.get("id_cols") or [],
+            value_cols=cfg.get("value_cols") or [],
+            var_name=cfg.get("var_name", "Category"),
+            value_name=cfg.get("value_name", "Value"),
+            tgt_file=tgt_p,
+            tgt_sheet=cfg.get("tgt_sheet", "Unpivot"),
+            append_mode=bool(cfg.get("append_mode", False)),
+            drop_na=bool(cfg.get("drop_na", True)),
         )
 
     if step_type == "sheet_updater":

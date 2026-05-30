@@ -105,6 +105,9 @@ from .split_export import (
     SPLIT_MODE_LABELS,
 )
 
+# Unpivot (Wide → Long)
+from .unpivot import run_unpivot_step
+
 # Sheet Updater
 from .sheet_updater import (
     run_sheet_updater_step,
@@ -211,6 +214,9 @@ __all__ = [
     'SPLIT_MODES',
     'SPLIT_MODE_KEYS',
     'SPLIT_MODE_LABELS',
+
+    # Unpivot
+    'run_unpivot_step',
 
     # Sheet Updater
     'run_sheet_updater_step',

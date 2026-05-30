@@ -22,6 +22,7 @@ from operations import (
     run_formula_step,
     run_convert_to_values_step,
     run_formula_broadcast_step,
+    run_unpivot_step,
     
     # Copy/Paste
     run_copy_paste_step,
@@ -749,6 +750,8 @@ def populate_form_from_step(step_type: str, config: dict):
         "sheet_updater": [("src_file", "su_src_file"), ("src_sheet", "su_src_sheet"),
                           ("tgt_file", "su_tgt_file")],
         "formula_broadcast": [("file", "fb_file")],
+        "unpivot": [("src_file", "up_src_file"), ("src_sheet", "up_src_sheet"),
+                    ("tgt_file", "up_tgt_file")],
         "advance_vlookup": [("file", "adv_vlookup_file"), ("sheet", "adv_vlookup_sheet"), ("prefix", "adv_vlookup_prefix"),
                            ("src_col", "adv_vlookup_src_col"), ("lookup_file", "adv_vlookup_lookup_file"),
                            ("lookup_sheet", "adv_vlookup_lookup_sheet"), ("key_col", "adv_vlookup_key_col"),
@@ -1138,6 +1141,20 @@ def populate_form_from_step(step_type: str, config: dict):
             st.session_state[f"se_filter_cond_{_i}_op"]  = _f.get("operator", "eq")
             st.session_state[f"se_filter_cond_{_i}_val"] = str(_f.get("value", "") or "")
 
+    # Special handling for unpivot
+    if step_type == "unpivot":
+        st.session_state["up_src_file"]       = cfg.get("src_file", "")
+        st.session_state["up_src_sheet"]      = cfg.get("src_sheet", "")
+        st.session_state["up_src_header_row"] = int(cfg.get("src_header_row", 1) or 1)
+        st.session_state["up_id_cols"]        = cfg.get("id_cols") or []
+        st.session_state["up_value_cols"]     = cfg.get("value_cols") or []
+        st.session_state["up_var_name"]       = cfg.get("var_name", "Category")
+        st.session_state["up_value_name"]     = cfg.get("value_name", "Value")
+        st.session_state["up_tgt_file"]       = cfg.get("tgt_file", "")
+        st.session_state["up_tgt_sheet"]      = cfg.get("tgt_sheet", "Unpivot")
+        st.session_state["up_append_mode"]    = bool(cfg.get("append_mode", False))
+        st.session_state["up_drop_na"]        = bool(cfg.get("drop_na", True))
+
     # Special handling for formula_broadcast
     if step_type == "formula_broadcast":
         st.session_state["fb_scope"]          = cfg.get("scope", "all_sheets")
@@ -1275,6 +1292,9 @@ def render_add_steps_tab():
         if st.button("Pivot Table", use_container_width=True,
                      help="Build a pivot table from source data — sums/counts/averages by row and column groupings"):
             st.session_state.adding_step = "pivot"
+        if st.button("Unpivot / Wide→Long", use_container_width=True,
+                     help="Convert wide-format table (columns = categories) into long/database format (one row per category) using pandas melt"):
+            st.session_state.adding_step = "unpivot"
         if st.button("Split Export", use_container_width=True,
                      help="Slice data into one file/multiple sheets, multiple files, or two-level file+sheet splits by column values"):
             st.session_state.adding_step = "split_export"
@@ -1355,6 +1375,8 @@ def render_add_steps_tab():
             render_split_export_form()
         elif step_type == "sheet_updater":
             render_sheet_updater_form()
+        elif step_type == "unpivot":
+            render_unpivot_form()
         elif step_type == "input_source":
             render_input_source_form()
         elif step_type == "normalize_import":
@@ -5279,6 +5301,181 @@ def render_split_export_form():
         })
 
 
+def render_unpivot_form():
+    """Unpivot (Wide → Long) — reshape a wide table into long/database format."""
+    from core import wb_cache as _wbc
+
+    st.markdown('<div class="pkf-section">Unpivot / Wide → Long</div>', unsafe_allow_html=True)
+    st.caption(
+        "Turn a wide table *(one column per category)* into long format *(one row per category)*. "
+        "Uses `pandas.melt()` internally."
+    )
+
+    # Example callout
+    with st.expander("📖 Example", expanded=False):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**Input (wide)**")
+            st.dataframe({"Company": ["ABC Ltd", "XYZ Ltd"],
+                          "Rent":    [1000, 2000],
+                          "Salary":  [5000, 6000],
+                          "Travel":  [700,  900]}, use_container_width=True)
+        with col_b:
+            st.markdown("**Output (long)**")
+            st.dataframe({"Company":  ["ABC Ltd","ABC Ltd","ABC Ltd","XYZ Ltd","XYZ Ltd","XYZ Ltd"],
+                          "Category": ["Rent","Salary","Travel","Rent","Salary","Travel"],
+                          "Value":    [1000,5000,700,2000,6000,900]}, use_container_width=True)
+
+    st.divider()
+
+    # ── Source ────────────────────────────────────────────────────────────────
+    st.markdown("**Source  *(wide-format file)***")
+    r1c1, r1c2, r1c3 = st.columns([3, 3, 1])
+    with r1c1:
+        up_src_file = st.selectbox("Source File", get_files(), key="up_src_file")
+    with r1c2:
+        up_src_sheet = sheet_selectbox("Source Sheet", up_src_file, key="up_src_sheet")
+    with r1c3:
+        up_src_hrow = st.number_input(
+            "Header Row", min_value=1,
+            value=int(st.session_state.get("up_src_header_row", 1) or 1),
+            key="up_src_header_row",
+        )
+
+    # Auto-detect columns
+    _up_ctx = (up_src_file or "", up_src_sheet or "", int(up_src_hrow))
+    if st.session_state.get("up_detect_ctx") != _up_ctx:
+        st.session_state["up_detect_ctx"] = _up_ctx
+        st.session_state["up_col_list"]   = []
+        if up_src_file and up_src_sheet:
+            _fp = get_file_path(up_src_file)
+            if _fp:
+                try:
+                    _df = _wbc.read_excel(_fp, sheet_name=up_src_sheet,
+                                          header=int(up_src_hrow) - 1, nrows=0)
+                    st.session_state["up_col_list"] = [str(c).strip() for c in _df.columns]
+                except Exception:
+                    st.session_state["up_col_list"] = []
+
+    _up_cols = st.session_state.get("up_col_list", [])
+
+    st.divider()
+
+    # ── Column selection ──────────────────────────────────────────────────────
+    st.markdown("**Column Selection**")
+
+    if _up_cols:
+        # ID columns — multiselect
+        _saved_id = [c for c in (st.session_state.get("up_id_cols") or []) if c in _up_cols]
+        up_id_cols = st.multiselect(
+            "ID Columns  *(columns that identify each row — stay as-is)*",
+            options=_up_cols,
+            default=_saved_id,
+            key="up_id_cols",
+            help="e.g. Company, Region, Date — these columns are NOT unpivoted",
+        )
+
+        # Value columns — multiselect (default = all non-ID)
+        _remaining = [c for c in _up_cols if c not in up_id_cols]
+        _saved_val = [c for c in (st.session_state.get("up_value_cols") or []) if c in _remaining]
+        up_value_cols = st.multiselect(
+            "Value Columns  *(columns to unpivot — leave empty = all remaining)*",
+            options=_remaining,
+            default=_saved_val if _saved_val else [],
+            key="up_value_cols",
+            help="e.g. Rent, Salary, Travel — these become rows. Leave empty to unpivot ALL non-ID columns.",
+        )
+        if not up_value_cols:
+            st.info(f"ℹ️ All {len(_remaining)} non-ID column(s) will be unpivoted: `{', '.join(_remaining)}`")
+    else:
+        st.info("⬆️ Select a source file and sheet above to auto-detect columns.")
+        up_id_cols = st.session_state.get("up_id_cols") or []
+        up_value_cols = st.session_state.get("up_value_cols") or []
+
+    st.divider()
+
+    # ── Output column names ───────────────────────────────────────────────────
+    st.markdown("**Output Column Names**")
+    n1, n2 = st.columns(2)
+    with n1:
+        up_var_name = st.text_input(
+            "Category column name",
+            value=st.session_state.get("up_var_name", "Category"),
+            key="up_var_name",
+            help="Name of the new column that holds the original column headers",
+        )
+    with n2:
+        up_value_name = st.text_input(
+            "Value column name",
+            value=st.session_state.get("up_value_name", "Value"),
+            key="up_value_name",
+            help="Name of the new column that holds the cell values",
+        )
+
+    up_drop_na = st.checkbox(
+        "Drop rows where Value is blank/null",
+        value=bool(st.session_state.get("up_drop_na", True)),
+        key="up_drop_na",
+    )
+
+    st.divider()
+
+    # ── Target ────────────────────────────────────────────────────────────────
+    st.markdown("**Target  *(where to write the long-format result)***")
+    t1, t2 = st.columns([3, 3])
+    with t1:
+        up_tgt_file = st.selectbox("Target File", get_files(), key="up_tgt_file",
+                                   help="Can be the same as the source file — result is written to a new sheet")
+    with t2:
+        up_tgt_sheet = st.text_input(
+            "Target Sheet Name",
+            value=st.session_state.get("up_tgt_sheet", "Unpivot"),
+            key="up_tgt_sheet",
+        )
+
+    export = st.checkbox("Export after run", value=True, key="up_export")
+
+    # ── Save step ─────────────────────────────────────────────────────────────
+    if st.button("➕ Add Unpivot Step", type="primary", use_container_width=True):
+        if not up_src_file:
+            st.error("Please select a Source File.")
+            return
+        if not up_src_sheet:
+            st.error("Please select a Source Sheet.")
+            return
+        if not up_id_cols:
+            st.error("Please select at least one ID Column.")
+            return
+        if not up_tgt_file:
+            st.error("Please select a Target File.")
+            return
+        if not up_tgt_sheet.strip():
+            st.error("Please enter a Target Sheet name.")
+            return
+
+        _vc_display = ", ".join(up_value_cols) if up_value_cols else "all non-ID cols"
+        _label = (
+            f"Unpivot  [{up_src_sheet}]  "
+            f"ID: {', '.join(up_id_cols)}  |  "
+            f"Values: {_vc_display}  →  {up_var_name}/{up_value_name}"
+        )
+
+        add_step("unpivot", _label, {
+            "src_file":       up_src_file,
+            "src_sheet":      up_src_sheet,
+            "src_header_row": int(up_src_hrow),
+            "id_cols":        list(up_id_cols),
+            "value_cols":     list(up_value_cols),
+            "var_name":       up_var_name.strip() or "Category",
+            "value_name":     up_value_name.strip() or "Value",
+            "tgt_file":       up_tgt_file,
+            "tgt_sheet":      up_tgt_sheet.strip(),
+            "append_mode":    False,
+            "drop_na":        bool(up_drop_na),
+            "export":         export,
+        })
+
+
 def render_sheet_updater_form():
     """Sheet Updater — push master (category/particulars/value) values into matching sheets."""
     from core import wb_cache as _wbc
@@ -6467,6 +6664,25 @@ def execute_step(step):
             fallback_lookups=fb_lookups,
         )
 
+    if step_type == "unpivot":
+        _up_src_path, _up_err = _resolve_required_path(cfg.get("src_file"), field="src_file")
+        if _up_err: return False, _up_err
+        _up_tgt_label = cfg.get("tgt_file")
+        _up_tgt_p = get_file_path(_up_tgt_label) if _up_tgt_label else ""
+        return run_unpivot_step(
+            src_file_path=_up_src_path,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_header_row=int(cfg.get("src_header_row", 1) or 1),
+            id_cols=cfg.get("id_cols") or [],
+            value_cols=cfg.get("value_cols") or [],
+            var_name=cfg.get("var_name", "Category"),
+            value_name=cfg.get("value_name", "Value"),
+            tgt_file=_up_tgt_p or "",
+            tgt_sheet=cfg.get("tgt_sheet", "Unpivot"),
+            append_mode=bool(cfg.get("append_mode", False)),
+            drop_na=bool(cfg.get("drop_na", True)),
+        )
+
     if step_type == "formula_broadcast":
         _fb_scope = cfg.get("scope", "all_sheets")
         _fb_file_label = cfg.get("file", "")
@@ -7247,6 +7463,24 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             on_missing_default=cfg.get("on_missing_default", 0),
         )
 
+    if step_type == "unpivot":
+        src_p = path_for(cfg.get("src_file"))
+        if not src_p: return False, f"Source file not found: {cfg.get('src_file')}"
+        tgt_p = path_for(cfg.get("tgt_file")) or ""
+        return run_unpivot_step(
+            src_file_path=src_p,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_header_row=int(cfg.get("src_header_row", 1) or 1),
+            id_cols=cfg.get("id_cols") or [],
+            value_cols=cfg.get("value_cols") or [],
+            var_name=cfg.get("var_name", "Category"),
+            value_name=cfg.get("value_name", "Value"),
+            tgt_file=tgt_p,
+            tgt_sheet=cfg.get("tgt_sheet", "Unpivot"),
+            append_mode=bool(cfg.get("append_mode", False)),
+            drop_na=bool(cfg.get("drop_na", True)),
+        )
+
     if step_type == "formula_broadcast":
         _fb_scope = cfg.get("scope", "all_sheets")
         _fb_fp = path_for(cfg.get("file")) or ""
@@ -7346,6 +7580,8 @@ def _determine_modified_file_labels(step_type: str, cfg: dict) -> list[str]:
         return [cfg.get("tgt_file", "")]
     if step_type == "formula_broadcast":
         return [cfg.get("file", "")]
+    if step_type == "unpivot":
+        return [cfg.get("tgt_file", "")]
     if step_type in ("import", "append", "header_map"):
         return [cfg.get("tgt_file", "")]
     if step_type == "vlookup"and (cfg.get("mode") == "explicit"or cfg.get("lookup_value_file")):
@@ -7925,6 +8161,9 @@ def add_step(step_type, name, config):
                 continue
             # formula_broadcast targets sheets dynamically — no tgt_sheet dropdown
             if step_type == "formula_broadcast":
+                continue
+            # unpivot tgt_sheet is a free-text field, not a dropdown
+            if step_type == "unpivot" and sheet_key == "tgt_sheet":
                 continue
             # pivot writes to a user-named sheet — sheet name is stored in tgt_sheet as a text field,
             # not a dropdown, so the Excel-label guard is irrelevant; skip to avoid false positives

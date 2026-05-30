@@ -147,6 +147,14 @@ OPERATION_REGISTRY = {
         "when_to_use": "When you need to distribute data into separate files or sheets by category — e.g. one file per client, one sheet per month",
         "difficulty": "standard",
     },
+    "unpivot": {
+        "user_label": "Unpivot (Wide → Long)",
+        "category": "Clean & Transform",
+        "icon": "pivot_table_chart",
+        "description": "Convert a wide Excel table (one row per entity, one column per category) into long/database format (one row per entity-category pair) using pandas melt",
+        "when_to_use": "When your data has categories as column headers (Rent, Salary, Travel) and you need them as row values instead — classic wide-to-long reshaping",
+        "difficulty": "standard",
+    },
     "sheet_updater": {
         "user_label": "Sheet Updater",
         "category": "Format & Report",
