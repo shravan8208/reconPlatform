@@ -26,6 +26,7 @@ from operations import (
     run_sheet_row_inserter_step,
     run_unpivot_step,
     run_delete_sheets_step,
+    run_convert_format_step,
 )
 from ui.components import (
     get_file_path, register_file_path, ensure_step_ids,
@@ -242,6 +243,20 @@ def execute_step(step):
         return run_convert_to_values_step(
             file_path, cfg.get("sheet"), cfg.get("column"),
             cfg.get("start"), cfg.get("end"),
+        )
+    if step_type == "convert_format":
+        return run_convert_format_step(
+            file_path=file_path,
+            sheet_name=cfg.get("sheet", ""),
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
+            column=cfg.get("column", ""),
+            start_row=int(cfg.get("start_row", 2) or 2),
+            format_type=cfg.get("format_type", "number"),
+            date_format=cfg.get("date_format", "DD-MM-YYYY"),
+            custom_number_format=cfg.get("custom_number_format", ""),
+            header_row=int(cfg.get("header_row", 1) or 1),
         )
     if step_type == "forward_fill":
         return run_forward_fill_step(file_path, cfg.get("sheet"), cfg.get("column"))
@@ -727,6 +742,20 @@ def execute_step_with_file_map(step, file_map):
         return run_copy_paste_step(file_path, cfg.get("sheet"), cfg.get("src_col"), cfg.get("tgt_cols") if cfg.get("tgt_cols") else cfg.get("tgt_col"), cfg.get("paste_type"), cfg.get("header_row", 1))
     if step_type == "convert_values":
         return run_convert_to_values_step(file_path, cfg.get("sheet"), cfg.get("column"), cfg.get("start"), cfg.get("end"))
+    if step_type == "convert_format":
+        return run_convert_format_step(
+            file_path=file_path,
+            sheet_name=cfg.get("sheet", ""),
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
+            column=cfg.get("column", ""),
+            start_row=int(cfg.get("start_row", 2) or 2),
+            format_type=cfg.get("format_type", "number"),
+            date_format=cfg.get("date_format", "DD-MM-YYYY"),
+            custom_number_format=cfg.get("custom_number_format", ""),
+            header_row=int(cfg.get("header_row", 1) or 1),
+        )
     if step_type == "forward_fill":
         return run_forward_fill_step(file_path, cfg.get("sheet"), cfg.get("column"))
     if step_type == "replace":

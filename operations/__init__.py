@@ -144,6 +144,15 @@ from .pivot_engine import (
     AGGFUNC_LABELS,
 )
 
+# Convert Format (type conversion + Excel number format)
+from .convert_format import (
+    run_convert_format_step,
+    CONVERT_FORMAT_TYPES,
+    CONVERT_FORMAT_TYPE_KEYS,
+    CONVERT_FORMAT_TYPE_LABELS,
+    DATE_FORMAT_OPTIONS,
+)
+
 # Normalize Import (per-class header mapping → working file)
 from .normalize_import import (
     run_normalize_import_step,
@@ -266,6 +275,13 @@ __all__ = [
 
     # Folder Summary
     'run_folder_summary_step',
+
+    # Convert Format
+    'run_convert_format_step',
+    'CONVERT_FORMAT_TYPES',
+    'CONVERT_FORMAT_TYPE_KEYS',
+    'CONVERT_FORMAT_TYPE_LABELS',
+    'DATE_FORMAT_OPTIONS',
 
     # Normalize Import
     'run_normalize_import_step',

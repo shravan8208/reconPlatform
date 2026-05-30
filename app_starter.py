@@ -118,6 +118,13 @@ from operations import (
     SPLIT_MODE_KEYS,
     SPLIT_MODE_LABELS,
 
+    # Convert Format
+    run_convert_format_step,
+    CONVERT_FORMAT_TYPES,
+    CONVERT_FORMAT_TYPE_KEYS,
+    CONVERT_FORMAT_TYPE_LABELS,
+    DATE_FORMAT_OPTIONS,
+
     # Sheet Row Inserter
     run_sheet_row_inserter_step,
     ANCHOR_MATCH_MODES,
@@ -752,6 +759,9 @@ def populate_form_from_step(step_type: str, config: dict):
                        ("paste_type", "copy_paste_type"), ("header_row", "copy_paste_header")],
         "convert_values": [("file", "convert_values_file"), ("sheet", "convert_values_sheet"), ("column", "convert_values_col"),
                           ("start", "convert_values_start")],
+        "convert_format": [("file", "cf_file"), ("sheet", "cf_sheet"), ("column", "cf_column"),
+                           ("start_row", "cf_start_row"), ("header_row", "cf_header_row"),
+                           ("date_format", "cf_date_format"), ("custom_number_format", "cf_custom_fmt")],
         "forward_fill": [("file", "forward_fill_file"), ("sheet", "forward_fill_sheet"), ("column", "forward_fill_col")],
         "replace": [("file", "replace_file"), ("sheet", "replace_sheet"), ("old_val", "replace_old"),
                    ("new_val", "replace_new"), ("column", "replace_col")],
@@ -1216,6 +1226,16 @@ def populate_form_from_step(step_type: str, config: dict):
         st.session_state["write_cell_ref"]            = cfg.get("cell_ref", "A1")
         st.session_state["write_cell_column"]         = cfg.get("column", "A")
 
+    # Special handling for convert_format
+    if step_type == "convert_format":
+        st.session_state["cf_scope"]      = cfg.get("scope", "single")
+        _ft = cfg.get("format_type", "number")
+        st.session_state["cf_format_type_idx"] = (
+            CONVERT_FORMAT_TYPE_KEYS.index(_ft) if _ft in CONVERT_FORMAT_TYPE_KEYS else 0
+        )
+        st.session_state["cf_include_sheets"] = ", ".join(cfg.get("include_sheets") or [])
+        st.session_state["cf_exclude_sheets"] = ", ".join(cfg.get("exclude_sheets") or [])
+
     # Special handling for sheet_row_inserter
     if step_type == "sheet_row_inserter":
         st.session_state["sri_src_file"]           = cfg.get("src_file", "")
@@ -1337,6 +1357,9 @@ def render_add_steps_tab():
             st.session_state.adding_step = "copy_paste"
         if st.button("Convert Values", use_container_width=True):
             st.session_state.adding_step = "convert_values"
+        if st.button("Convert Format", use_container_width=True,
+                     help="Convert a column to Number / Integer / Date / Text / Percentage — single sheet or all sheets"):
+            st.session_state.adding_step = "convert_format"
         if st.button("Forward Fill", use_container_width=True):
             st.session_state.adding_step = "forward_fill"
         if st.button("Replace", use_container_width=True):
@@ -1430,6 +1453,8 @@ def render_add_steps_tab():
             render_copy_paste_form()
         elif step_type == "convert_values":
             render_convert_values_form()
+        elif step_type == "convert_format":
+            render_convert_format_form()
         elif step_type == "forward_fill":
             render_forward_fill_form()
         elif step_type == "replace":
@@ -1802,6 +1827,162 @@ def render_convert_values_form():
             "file": file, "sheet": sheet, "column": column,
             "start": start, "end": end,
             "export": export,
+        })
+
+
+def render_convert_format_form():
+    """Convert a column's values to Number / Integer / Text / Date / Percentage."""
+    st.markdown('<div class="pkf-section">Convert Column Format</div>', unsafe_allow_html=True)
+    st.caption(
+        "Convert values in a column to a specific type and apply the matching Excel number format. "
+        "Works on a single sheet or across **all sheets** in a workbook."
+    )
+
+    # ── File ─────────────────────────────────────────────────────────────────
+    cf_file = st.selectbox("File", get_files(), key="cf_file")
+
+    # ── Scope ─────────────────────────────────────────────────────────────────
+    _cf_scope_opts = ["Single Sheet", "All Sheets", "Selected Sheets"]
+    _cf_scope_keys = ["single", "all_sheets", "selected_sheets"]
+    _cf_scope_saved = st.session_state.get("cf_scope", "single")
+    _cf_scope_idx   = _cf_scope_keys.index(_cf_scope_saved) if _cf_scope_saved in _cf_scope_keys else 0
+    _cf_scope_lbl   = st.radio(
+        "Scope",
+        _cf_scope_opts,
+        index=_cf_scope_idx,
+        horizontal=True,
+        key="cf_scope_radio",
+    )
+    cf_scope = _cf_scope_keys[_cf_scope_opts.index(_cf_scope_lbl)]
+
+    cf_sheet = ""
+    cf_include_sheets = []
+    cf_exclude_sheets = []
+
+    if cf_scope == "single":
+        cf_sheet = sheet_selectbox("Sheet", cf_file, key="cf_sheet")
+    elif cf_scope == "selected_sheets":
+        _inc_raw = st.text_input(
+            "Include Sheets *(comma-separated; blank = all)*",
+            value=st.session_state.get("cf_include_sheets", ""),
+            key="cf_include_sheets",
+            placeholder="e.g.  Sheet1, Sheet2",
+        )
+        _exc_raw = st.text_input(
+            "Exclude Sheets *(comma-separated)*",
+            value=st.session_state.get("cf_exclude_sheets", ""),
+            key="cf_exclude_sheets",
+            placeholder="e.g.  Summary, Total",
+        )
+        cf_include_sheets = [s.strip() for s in _inc_raw.split(",") if s.strip()]
+        cf_exclude_sheets = [s.strip() for s in _exc_raw.split(",") if s.strip()]
+    else:
+        st.caption("*All sheets in the workbook will be processed.*")
+
+    st.divider()
+
+    # ── Column & row range ────────────────────────────────────────────────────
+    _cc1, _cc2, _cc3 = st.columns([3, 1, 1])
+    with _cc1:
+        cf_column = st.text_input(
+            "Column to Convert",
+            value=st.session_state.get("cf_column", ""),
+            key="cf_column",
+            placeholder="Header name  or  A / B / C  or  1 / 2 / 3",
+        )
+    with _cc2:
+        cf_start_row = st.number_input(
+            "Start Row",
+            min_value=1,
+            value=int(st.session_state.get("cf_start_row", 2) or 2),
+            key="cf_start_row",
+            help="First data row to convert (1-based). Default 2 skips the header.",
+        )
+    with _cc3:
+        cf_header_row = st.number_input(
+            "Header Row",
+            min_value=1,
+            value=int(st.session_state.get("cf_header_row", 1) or 1),
+            key="cf_header_row",
+            help="Row containing column headers (used for column name lookup).",
+        )
+
+    st.divider()
+
+    # ── Format type ───────────────────────────────────────────────────────────
+    st.markdown("**Target Format**")
+    _ft_idx = int(st.session_state.get("cf_format_type_idx", 0))
+    _ft_lbl = st.selectbox(
+        "Convert to",
+        CONVERT_FORMAT_TYPE_LABELS,
+        index=_ft_idx,
+        key="cf_format_type_label",
+    )
+    cf_format_type = CONVERT_FORMAT_TYPE_KEYS[CONVERT_FORMAT_TYPE_LABELS.index(_ft_lbl)]
+
+    cf_date_format = "DD-MM-YYYY"
+    if cf_format_type == "date":
+        _df_opts = DATE_FORMAT_OPTIONS + ["Custom…"]
+        _df_saved = st.session_state.get("cf_date_format", "DD-MM-YYYY")
+        _df_preset_idx = _df_opts.index(_df_saved) if _df_saved in _df_opts else len(_df_opts) - 1
+        _df_sel = st.selectbox(
+            "Date Format",
+            _df_opts,
+            index=_df_preset_idx,
+            key="cf_date_format_select",
+        )
+        if _df_sel == "Custom…":
+            cf_date_format = st.text_input(
+                "Custom date format code",
+                value=st.session_state.get("cf_date_format", "DD-MM-YYYY"),
+                key="cf_date_format",
+                placeholder="e.g.  DD-MMM-YYYY  or  YYYY/MM/DD",
+            )
+        else:
+            cf_date_format = _df_sel
+            st.session_state["cf_date_format"] = cf_date_format
+
+    # Optional custom number format override
+    with st.expander("Custom Excel number format code *(optional)*", expanded=False):
+        st.caption(
+            "Leave blank to use the default format for the chosen type. "
+            "Or enter any Excel format code, e.g. `#,##0` · `0.000` · `DD/MMM/YY`."
+        )
+        cf_custom_fmt = st.text_input(
+            "Custom format code",
+            value=st.session_state.get("cf_custom_fmt", ""),
+            key="cf_custom_fmt",
+            placeholder="e.g.  #,##0  or  0.00%",
+            label_visibility="collapsed",
+        )
+
+    export = export_options_ui("cf")
+
+    # ── Add Step ──────────────────────────────────────────────────────────────
+    if st.button("➕ Add Convert Format Step", type="primary", use_container_width=True):
+        if not cf_file:
+            st.error("Select a file."); return
+        if cf_scope == "single" and not cf_sheet:
+            st.error("Select a sheet for Single Sheet mode."); return
+        if not cf_column:
+            st.error("Specify the column to convert."); return
+
+        _scope_short = {"single": cf_sheet, "all_sheets": "all sheets", "selected_sheets": "selected"}.get(cf_scope, cf_scope)
+        _label = f"Convert Format  [{cf_column} → {_ft_lbl}]  {_scope_short}"
+
+        add_step("convert_format", _label, {
+            "file":                 cf_file,
+            "sheet":                cf_sheet,
+            "scope":                cf_scope,
+            "include_sheets":       cf_include_sheets,
+            "exclude_sheets":       cf_exclude_sheets,
+            "column":               cf_column,
+            "start_row":            int(cf_start_row),
+            "header_row":           int(cf_header_row),
+            "format_type":          cf_format_type,
+            "date_format":          cf_date_format,
+            "custom_number_format": cf_custom_fmt,
+            "export":               export,
         })
 
 
@@ -7700,7 +7881,23 @@ def execute_step(step):
                 cfg.get('start'), cfg.get('end')
             )
             return ok, f"{msg} (saved to original: {file_path})"
-        
+
+        elif step_type == "convert_format":
+            ok, msg = run_convert_format_step(
+                file_path=file_path,
+                sheet_name=cfg.get("sheet", ""),
+                scope=cfg.get("scope", "single"),
+                include_sheets=cfg.get("include_sheets") or [],
+                exclude_sheets=cfg.get("exclude_sheets") or [],
+                column=cfg.get("column", ""),
+                start_row=int(cfg.get("start_row", 2) or 2),
+                format_type=cfg.get("format_type", "number"),
+                date_format=cfg.get("date_format", "DD-MM-YYYY"),
+                custom_number_format=cfg.get("custom_number_format", ""),
+                header_row=int(cfg.get("header_row", 1) or 1),
+            )
+            return ok, f"{msg} (saved to original: {file_path})"
+
         elif step_type == "forward_fill":
             ok, msg = run_forward_fill_step(
                 file_path, cfg.get('sheet'), cfg.get('column')
@@ -8125,6 +8322,20 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
         )
     if step_type == "convert_values":
         return run_convert_to_values_step(file_path, cfg.get("sheet"), cfg.get("column"), cfg.get("start"), cfg.get("end"))
+    if step_type == "convert_format":
+        return run_convert_format_step(
+            file_path=file_path,
+            sheet_name=cfg.get("sheet", ""),
+            scope=cfg.get("scope", "single"),
+            include_sheets=cfg.get("include_sheets") or [],
+            exclude_sheets=cfg.get("exclude_sheets") or [],
+            column=cfg.get("column", ""),
+            start_row=int(cfg.get("start_row", 2) or 2),
+            format_type=cfg.get("format_type", "number"),
+            date_format=cfg.get("date_format", "DD-MM-YYYY"),
+            custom_number_format=cfg.get("custom_number_format", ""),
+            header_row=int(cfg.get("header_row", 1) or 1),
+        )
     if step_type == "forward_fill":
         return run_forward_fill_step(file_path, cfg.get("sheet"), cfg.get("column"))
     if step_type == "replace":
@@ -9118,6 +9329,8 @@ def add_step(step_type, name, config):
             or (step_type == "write_cell" and config.get("scope", "single") == "all_sheets")
             # Conditional Write across all sheets
             or (step_type == "conditional" and config.get("scope", "single") == "all_sheets")
+            # Convert Format across all/selected sheets
+            or (step_type == "convert_format" and config.get("scope", "single") != "single")
         )
         if not _skip_sheet_check and "file"in config and "sheet"in config and _is_excel_label(config.get("file")) and not config.get("sheet"):
             st.warning("Please select a sheet (dropdown) for the chosen Excel file.")

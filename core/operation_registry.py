@@ -119,6 +119,14 @@ OPERATION_REGISTRY = {
         "when_to_use": "After using formulas, when you want to lock in the results",
         "difficulty": "easy",
     },
+    "convert_format": {
+        "user_label": "Convert Column Format",
+        "category": "Clean & Transform",
+        "icon": "transform",
+        "description": "Convert a column's values to a specific type — Number, Integer, Text, Date, or Percentage — and apply the matching Excel number format. Works on one sheet or all sheets.",
+        "when_to_use": "When values are stored as text but should be numbers (or dates), or when you want to stamp a standard date/number format across every sheet in a workbook",
+        "difficulty": "easy",
+    },
     "write_cell": {
         "user_label": "Write a Value to Cells",
         "category": "Clean & Transform",
