@@ -110,6 +110,17 @@ from .split_export import (
 # Unpivot (Wide → Long)
 from .unpivot import run_unpivot_step
 
+# Sheet Row Inserter
+from .sheet_row_inserter import (
+    run_sheet_row_inserter_step,
+    ANCHOR_MATCH_MODES,
+    ANCHOR_MATCH_KEYS,
+    ANCHOR_MATCH_LABELS,
+    INSERT_POSITIONS,
+    INSERT_POSITION_KEYS,
+    INSERT_POSITION_LABELS,
+)
+
 # Sheet Updater
 from .sheet_updater import (
     run_sheet_updater_step,
@@ -224,6 +235,15 @@ __all__ = [
 
     # Unpivot
     'run_unpivot_step',
+
+    # Sheet Row Inserter
+    'run_sheet_row_inserter_step',
+    'ANCHOR_MATCH_MODES',
+    'ANCHOR_MATCH_KEYS',
+    'ANCHOR_MATCH_LABELS',
+    'INSERT_POSITIONS',
+    'INSERT_POSITION_KEYS',
+    'INSERT_POSITION_LABELS',
 
     # Sheet Updater
     'run_sheet_updater_step',

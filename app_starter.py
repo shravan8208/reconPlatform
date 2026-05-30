@@ -118,6 +118,15 @@ from operations import (
     SPLIT_MODE_KEYS,
     SPLIT_MODE_LABELS,
 
+    # Sheet Row Inserter
+    run_sheet_row_inserter_step,
+    ANCHOR_MATCH_MODES,
+    ANCHOR_MATCH_KEYS,
+    ANCHOR_MATCH_LABELS,
+    INSERT_POSITIONS,
+    INSERT_POSITION_KEYS,
+    INSERT_POSITION_LABELS,
+
     # Sheet Updater
     run_sheet_updater_step,
     SHEET_MATCH_MODES,
@@ -752,6 +761,8 @@ def populate_form_from_step(step_type: str, config: dict):
                    ("tgt_file", "pivot_tgt_file")],
         "split_export": [("src_file", "se_src_file"), ("src_sheet", "se_src_sheet"),
                          ("tgt_file", "se_tgt_file")],
+        "sheet_row_inserter": [("src_file", "sri_src_file"), ("src_sheet", "sri_src_sheet"),
+                               ("tgt_file", "sri_tgt_file")],
         "sheet_updater": [("src_file", "su_src_file"), ("src_sheet", "su_src_sheet"),
                           ("tgt_file", "su_tgt_file")],
         "formula_broadcast": [("file", "fb_file")],
@@ -1205,6 +1216,32 @@ def populate_form_from_step(step_type: str, config: dict):
         st.session_state["write_cell_ref"]            = cfg.get("cell_ref", "A1")
         st.session_state["write_cell_column"]         = cfg.get("column", "A")
 
+    # Special handling for sheet_row_inserter
+    if step_type == "sheet_row_inserter":
+        st.session_state["sri_src_file"]           = cfg.get("src_file", "")
+        st.session_state["sri_src_sheet"]          = cfg.get("src_sheet", "")
+        st.session_state["sri_col_category"]       = cfg.get("src_col_category", "")
+        st.session_state["sri_col_particulars"]    = cfg.get("src_col_particulars", "")
+        st.session_state["sri_col_value"]          = cfg.get("src_col_value", "")
+        st.session_state["sri_tgt_file"]           = cfg.get("tgt_file", "")
+        _sm = cfg.get("sheet_match_mode", "cat_in_sheet")
+        st.session_state["sri_sheet_match_idx"]    = SHEET_MATCH_KEYS.index(_sm) if _sm in SHEET_MATCH_KEYS else 0
+        st.session_state["sri_anchor_col"]         = cfg.get("anchor_col", "")
+        st.session_state["sri_anchor_mode"]        = cfg.get("anchor_mode", "particulars")
+        st.session_state["sri_anchor_value"]       = cfg.get("anchor_value", "")
+        _am = cfg.get("anchor_match", "exact")
+        st.session_state["sri_anchor_match_idx"]   = ANCHOR_MATCH_KEYS.index(_am) if _am in ANCHOR_MATCH_KEYS else 0
+        _ip = cfg.get("insert_position", "after_last")
+        st.session_state["sri_insert_pos_idx"]     = INSERT_POSITION_KEYS.index(_ip) if _ip in INSERT_POSITION_KEYS else 2
+        st.session_state["sri_tgt_col_particulars"] = cfg.get("tgt_col_particulars", "")
+        st.session_state["sri_tgt_col_value"]      = cfg.get("tgt_col_value", "")
+        st.session_state["sri_tgt_header_row"]     = int(cfg.get("tgt_header_row", 1) or 1)
+        _ecm = cfg.get("extra_col_map") or []
+        st.session_state["sri_extra_map_count"]    = max(len(_ecm), 0)
+        for _i, _m in enumerate(_ecm):
+            st.session_state[f"sri_extra_{_i}_src"] = _m.get("src_col", "")
+            st.session_state[f"sri_extra_{_i}_tgt"] = _m.get("tgt_col", "")
+
     # Special handling for sheet_updater
     if step_type == "sheet_updater":
         st.session_state["su_src_file"]           = cfg.get("src_file", "")
@@ -1351,6 +1388,9 @@ def render_add_steps_tab():
         if st.button("Sheet Updater", use_container_width=True,
                      help="Push values from a master (category/particulars/value) sheet into matching sheets of a target workbook"):
             st.session_state.adding_step = "sheet_updater"
+        if st.button("Sheet Row Inserter", use_container_width=True,
+                     help="Insert new rows at a specific position inside a multi-sheet workbook — finds an anchor row and inserts above/below it"):
+            st.session_state.adding_step = "sheet_row_inserter"
     
     # Column 4: Data Input
     with col4:
@@ -1425,6 +1465,8 @@ def render_add_steps_tab():
             render_split_export_form()
         elif step_type == "sheet_updater":
             render_sheet_updater_form()
+        elif step_type == "sheet_row_inserter":
+            render_sheet_row_inserter_form()
         elif step_type == "unpivot":
             render_unpivot_form()
         elif step_type == "input_source":
@@ -5905,6 +5947,235 @@ def render_unpivot_form():
         })
 
 
+def render_sheet_row_inserter_form():
+    """Sheet Row Inserter — insert rows from a master into specific positions in a multi-sheet workbook."""
+    from core import wb_cache as _wbc
+
+    st.markdown('<div class="pkf-section">Sheet Row Inserter</div>', unsafe_allow_html=True)
+    st.caption(
+        "Insert rows from a master sheet into a multi-sheet target workbook. "
+        "For each **Category → Sheet** match, the engine finds an **anchor row** "
+        "and physically inserts the master rows before or after it — "
+        "no values are overwritten, existing rows shift down."
+    )
+
+    # ── Master file ───────────────────────────────────────────────────────────
+    st.markdown("**Master File  *(Category | Particulars | Value)***")
+    m1, m2 = st.columns([3, 3])
+    with m1:
+        sri_src_file = st.selectbox("Master File", get_files(), key="sri_src_file")
+    with m2:
+        sri_src_sheet = sheet_selectbox("Master Sheet", sri_src_file, key="sri_src_sheet")
+
+    # Auto-detect columns
+    _sri_ctx = (sri_src_file or "", sri_src_sheet or "")
+    if st.session_state.get("sri_detect_ctx") != _sri_ctx:
+        st.session_state["sri_detect_ctx"] = _sri_ctx
+        st.session_state["sri_col_list"] = []
+        if sri_src_file and sri_src_sheet:
+            _fp = get_file_path(sri_src_file)
+            if _fp:
+                try:
+                    _df = _wbc.read_excel(_fp, sheet_name=sri_src_sheet, nrows=1)
+                    st.session_state["sri_col_list"] = [str(c).strip() for c in _df.columns]
+                except Exception:
+                    pass
+
+    _sri_cols = st.session_state.get("sri_col_list", [])
+    _col_opts = [""] + _sri_cols if _sri_cols else [""]
+
+    st.markdown("**Master Columns**")
+    c1, c2, c3 = st.columns(3)
+    for _key, _label, _col_widget in [
+        ("sri_col_category",    "Category Column *(→ sheet name)*",      c1),
+        ("sri_col_particulars", "Particulars Column *(→ anchor / data)*", c2),
+        ("sri_col_value",       "Value Column *(data to insert)*",        c3),
+    ]:
+        with _col_widget:
+            if _sri_cols:
+                _saved = st.session_state.get(_key, "")
+                _idx   = _col_opts.index(_saved) if _saved in _col_opts else 0
+                st.selectbox(_label, _col_opts, index=_idx, key=_key)
+            else:
+                st.text_input(_label, value=st.session_state.get(_key, ""), key=_key,
+                              placeholder="Header or A/B/C")
+
+    st.divider()
+
+    # ── Target file ───────────────────────────────────────────────────────────
+    st.markdown("**Target File  *(multi-sheet workbook to update)*  ⚠️ rows will be inserted in-place**")
+    sri_tgt_file = st.selectbox("Target File", get_files(), key="sri_tgt_file")
+
+    st.markdown("**Sheet Matching**")
+    _sm_idx = int(st.session_state.get("sri_sheet_match_idx", 0))
+    _sm_lbl = st.selectbox("Match Mode", SHEET_MATCH_LABELS, index=_sm_idx, key="sri_sheet_match_mode_label")
+    sri_sheet_match_mode = SHEET_MATCH_KEYS[SHEET_MATCH_LABELS.index(_sm_lbl)]
+
+    st.divider()
+
+    # ── Anchor configuration ──────────────────────────────────────────────────
+    st.markdown("**Anchor Row — where to insert**")
+    st.caption(
+        "The engine searches the target sheet for an **anchor row** and inserts the new rows "
+        "at the specified position relative to it."
+    )
+
+    sri_anchor_col = st.text_input(
+        "Anchor Column *(column in target sheet to search)*",
+        value=st.session_state.get("sri_anchor_col", ""),
+        key="sri_anchor_col",
+        placeholder="e.g.  A  or  Particulars",
+    )
+
+    ANCHOR_MODE_LABELS = ["Based on Particulars value *(looks for Particulars in anchor column)*",
+                          "Fixed value *(always look for the same text)*"]
+    ANCHOR_MODE_KEYS   = ["particulars", "fixed"]
+    _am_saved = st.session_state.get("sri_anchor_mode", "particulars")
+    _am_idx   = ANCHOR_MODE_KEYS.index(_am_saved) if _am_saved in ANCHOR_MODE_KEYS else 0
+    _am_lbl   = st.radio(
+        "What to search for",
+        ANCHOR_MODE_LABELS, index=_am_idx,
+        key="sri_anchor_mode_radio", horizontal=False,
+        help=(
+            "**Particulars** — for each group of master rows, searches the anchor column "
+            "for the Particulars value (e.g. inserts REFUNDS rows next to existing REFUNDS rows).\n\n"
+            "**Fixed** — always search for the same text (e.g. always insert before 'GRAND TOTAL')."
+        ),
+    )
+    sri_anchor_mode = ANCHOR_MODE_KEYS[ANCHOR_MODE_LABELS.index(_am_lbl)]
+
+    sri_anchor_value = ""
+    if sri_anchor_mode == "fixed":
+        sri_anchor_value = st.text_input(
+            "Anchor Value *(text to search for in the anchor column)*",
+            value=st.session_state.get("sri_anchor_value", ""),
+            key="sri_anchor_value",
+            placeholder="e.g.  GRAND TOTAL  or  END OF SECTION",
+        )
+
+    a1, a2 = st.columns(2)
+    with a1:
+        _amatch_idx = int(st.session_state.get("sri_anchor_match_idx", 0))
+        _amatch_lbl = st.selectbox("Anchor Match Mode", ANCHOR_MATCH_LABELS, index=_amatch_idx, key="sri_anchor_match_label")
+        sri_anchor_match = ANCHOR_MATCH_KEYS[ANCHOR_MATCH_LABELS.index(_amatch_lbl)]
+    with a2:
+        _ipos_idx = int(st.session_state.get("sri_insert_pos_idx", 2))  # default: after_last
+        _ipos_lbl = st.selectbox("Insert Position", INSERT_POSITION_LABELS, index=_ipos_idx, key="sri_insert_pos_label")
+        sri_insert_position = INSERT_POSITION_KEYS[INSERT_POSITION_LABELS.index(_ipos_lbl)]
+
+    st.divider()
+
+    # ── Column mapping ────────────────────────────────────────────────────────
+    st.markdown("**Column Mapping — where to write the values in the inserted rows**")
+    st.caption("Enter column letters (A, B…) or header names from the target sheets.")
+    w1, w2, w3 = st.columns([3, 3, 1])
+    with w1:
+        sri_tgt_col_particulars = st.text_input(
+            "Particulars → Target Column",
+            value=st.session_state.get("sri_tgt_col_particulars", ""),
+            key="sri_tgt_col_particulars",
+            placeholder="e.g.  A  or  Particulars",
+        )
+    with w2:
+        sri_tgt_col_value = st.text_input(
+            "Value → Target Column",
+            value=st.session_state.get("sri_tgt_col_value", ""),
+            key="sri_tgt_col_value",
+            placeholder="e.g.  D  or  Amount",
+        )
+    with w3:
+        sri_tgt_header_row = st.number_input(
+            "Header Row",
+            min_value=1,
+            value=int(st.session_state.get("sri_tgt_header_row", 1) or 1),
+            key="sri_tgt_header_row",
+        )
+
+    # Extra column mappings
+    with st.expander("Additional column mappings *(optional)*", expanded=False):
+        _n_extra = int(st.session_state.get("sri_extra_map_count", 0))
+        if st.button("➕ Add Mapping", key="sri_extra_add"):
+            st.session_state["sri_extra_map_count"] = _n_extra + 1
+            st.rerun()
+        _n_extra = int(st.session_state.get("sri_extra_map_count", 0))
+        _extra_maps = []
+        for _i in range(_n_extra):
+            _ec = st.columns([4, 4, 1])
+            _s = _ec[0].text_input(f"Master col {_i+1}", value=st.session_state.get(f"sri_extra_{_i}_src", ""),
+                                   key=f"sri_extra_{_i}_src", placeholder="master header/letter",
+                                   label_visibility="collapsed")
+            _t = _ec[1].text_input(f"Target col {_i+1}", value=st.session_state.get(f"sri_extra_{_i}_tgt", ""),
+                                   key=f"sri_extra_{_i}_tgt", placeholder="target col letter/header",
+                                   label_visibility="collapsed")
+            if _ec[2].button("✕", key=f"sri_extra_del_{_i}"):
+                for _j in range(_i, _n_extra - 1):
+                    st.session_state[f"sri_extra_{_j}_src"] = st.session_state.get(f"sri_extra_{_j+1}_src", "")
+                    st.session_state[f"sri_extra_{_j}_tgt"] = st.session_state.get(f"sri_extra_{_j+1}_tgt", "")
+                st.session_state["sri_extra_map_count"] = _n_extra - 1
+                st.rerun()
+            if _s.strip() and _t.strip():
+                _extra_maps.append({"src_col": _s.strip(), "tgt_col": _t.strip()})
+
+    export = st.checkbox("Export after run", value=True, key="sri_export")
+
+    # ── Add Step ──────────────────────────────────────────────────────────────
+    if st.button("➕ Add Sheet Row Inserter Step", type="primary", use_container_width=True):
+        sri_col_category    = st.session_state.get("sri_col_category", "")
+        sri_col_particulars = st.session_state.get("sri_col_particulars", "")
+        sri_col_value       = st.session_state.get("sri_col_value", "")
+
+        if not sri_src_file:
+            st.error("Select a Master File."); return
+        if not sri_src_sheet:
+            st.error("Select a Master Sheet."); return
+        if not sri_col_category:
+            st.error("Specify the Category column in the master."); return
+        if not sri_col_particulars:
+            st.error("Specify the Particulars column in the master."); return
+        if not sri_col_value:
+            st.error("Specify the Value column in the master."); return
+        if not sri_tgt_file:
+            st.error("Select a Target File."); return
+        if not sri_anchor_col:
+            st.error("Specify the Anchor Column in the target sheets."); return
+        if sri_anchor_mode == "fixed" and not sri_anchor_value:
+            st.error("Enter an Anchor Value for Fixed mode."); return
+        if not sri_tgt_col_particulars and not sri_tgt_col_value:
+            st.error("Specify at least one target write column (Particulars or Value)."); return
+
+        _pos_short = {
+            "before_first": "before-first",
+            "after_first":  "after-first",
+            "after_last":   "after-last",
+            "before_last":  "before-last",
+        }.get(sri_insert_position, sri_insert_position)
+        _anchor_desc = f"'{sri_anchor_value}'" if sri_anchor_mode == "fixed" else "by-particulars"
+        _label = (
+            f"Row Inserter  [{_anchor_desc} {_pos_short}]  "
+            f"{sri_col_category}→sheet / insert {sri_col_particulars}+{sri_col_value}"
+        )
+
+        add_step("sheet_row_inserter", _label, {
+            "src_file":            sri_src_file,
+            "src_sheet":           sri_src_sheet,
+            "src_col_category":    sri_col_category,
+            "src_col_particulars": sri_col_particulars,
+            "src_col_value":       sri_col_value,
+            "tgt_file":            sri_tgt_file,
+            "sheet_match_mode":    sri_sheet_match_mode,
+            "anchor_col":          sri_anchor_col,
+            "anchor_mode":         sri_anchor_mode,
+            "anchor_value":        sri_anchor_value,
+            "anchor_match":        sri_anchor_match,
+            "insert_position":     sri_insert_position,
+            "tgt_col_particulars": sri_tgt_col_particulars,
+            "tgt_col_value":       sri_tgt_col_value,
+            "extra_col_map":       _extra_maps,
+            "tgt_header_row":      int(sri_tgt_header_row),
+            "export":              export,
+        })
+
+
 def render_sheet_updater_form():
     """Sheet Updater — push master (category/particulars/value) values into matching sheets."""
     from core import wb_cache as _wbc
@@ -7223,6 +7494,30 @@ def execute_step(step):
             particulars_rules=cfg.get("particulars_rules") or [],
         )
 
+    if step_type == "sheet_row_inserter":
+        src_path, err = _resolve_required_path(cfg.get("src_file"), field="src_file")
+        if err: return False, err
+        _tgt_label = cfg.get("tgt_file")
+        _tgt_p = get_file_path(_tgt_label) if _tgt_label else ""
+        return run_sheet_row_inserter_step(
+            src_file_path=src_path,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=_tgt_p or "",
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            anchor_col=cfg.get("anchor_col", ""),
+            anchor_mode=cfg.get("anchor_mode", "particulars"),
+            anchor_value=cfg.get("anchor_value", ""),
+            anchor_match=cfg.get("anchor_match", "exact"),
+            insert_position=cfg.get("insert_position", "after_last"),
+            tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
+            tgt_col_value=cfg.get("tgt_col_value", ""),
+            extra_col_map=cfg.get("extra_col_map") or [],
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+        )
+
     if step_type == "split_export":
         src_path, err = _resolve_required_path(cfg.get("src_file"), field="src_file")
         if err: return False, err
@@ -8056,6 +8351,30 @@ def execute_step_with_file_map(step: dict, file_map: dict) -> tuple[bool, str]:
             particulars_rules=cfg.get("particulars_rules") or [],
         )
 
+    if step_type == "sheet_row_inserter":
+        src_p = path_for(cfg.get("src_file"))
+        if not src_p:
+            return False, f"Source file not found: {cfg.get('src_file')}"
+        tgt_p = path_for(cfg.get("tgt_file")) or ""
+        return run_sheet_row_inserter_step(
+            src_file_path=src_p,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=tgt_p,
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            anchor_col=cfg.get("anchor_col", ""),
+            anchor_mode=cfg.get("anchor_mode", "particulars"),
+            anchor_value=cfg.get("anchor_value", ""),
+            anchor_match=cfg.get("anchor_match", "exact"),
+            insert_position=cfg.get("insert_position", "after_last"),
+            tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
+            tgt_col_value=cfg.get("tgt_col_value", ""),
+            extra_col_map=cfg.get("extra_col_map") or [],
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+        )
+
     if step_type == "split_export":
         src_p = path_for(cfg.get("src_file"))
         if not src_p:
@@ -8115,7 +8434,7 @@ def _determine_modified_file_labels(step_type: str, cfg: dict) -> list[str]:
     """
     if step_type in ("add_files", "data_input", "input_source", "split_export"):
         return []   # split_export writes to new files, never modifies the source
-    if step_type == "sheet_updater":
+    if step_type in ("sheet_updater", "sheet_row_inserter"):
         return [cfg.get("tgt_file", "")]
     if step_type == "formula_broadcast":
         return [cfg.get("file", "")]
@@ -8705,8 +9024,8 @@ def add_step(step_type, name, config):
             if step_type == "split_export" and sheet_key == "tgt_sheet":
                 if config.get("split_mode", "single") != "single":
                     continue
-            # sheet_updater writes to dynamically matched sheets — no tgt_sheet dropdown
-            if step_type == "sheet_updater" and sheet_key == "tgt_sheet":
+            # sheet_updater / sheet_row_inserter write to dynamically matched sheets — no tgt_sheet dropdown
+            if step_type in ("sheet_updater", "sheet_row_inserter") and sheet_key == "tgt_sheet":
                 continue
             # formula_broadcast targets sheets dynamically — no tgt_sheet dropdown
             if step_type == "formula_broadcast":

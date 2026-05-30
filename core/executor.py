@@ -23,6 +23,7 @@ from operations import (
     run_pivot_step,
     run_split_export_step,
     run_sheet_updater_step,
+    run_sheet_row_inserter_step,
     run_unpivot_step,
     run_delete_sheets_step,
 )
@@ -573,6 +574,30 @@ def execute_step(step):
             particulars_rules=cfg.get("particulars_rules") or [],
         )
 
+    if step_type == "sheet_row_inserter":
+        src_path, err = _resolve(cfg.get("src_file"), "src_file")
+        if err: return False, err
+        tgt_label = cfg.get("tgt_file")
+        tgt_path = get_file_path(tgt_label) if tgt_label else ""
+        return run_sheet_row_inserter_step(
+            src_file_path=src_path,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=tgt_path or "",
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            anchor_col=cfg.get("anchor_col", ""),
+            anchor_mode=cfg.get("anchor_mode", "particulars"),
+            anchor_value=cfg.get("anchor_value", ""),
+            anchor_match=cfg.get("anchor_match", "exact"),
+            insert_position=cfg.get("insert_position", "after_last"),
+            tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
+            tgt_col_value=cfg.get("tgt_col_value", ""),
+            extra_col_map=cfg.get("extra_col_map") or [],
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
+        )
+
     return False, f"Unknown operation: {step_type}"
 
 
@@ -931,6 +956,29 @@ def execute_step_with_file_map(step, file_map):
             case_sensitive=bool(cfg.get("case_sensitive", False)),
             particulars_match_mode=cfg.get("particulars_match_mode", "iexact"),
             particulars_rules=cfg.get("particulars_rules") or [],
+        )
+
+    if step_type == "sheet_row_inserter":
+        src_p = path_for(cfg.get("src_file"))
+        if not src_p: return False, f"Source file not found: {cfg.get('src_file')}"
+        tgt_p = path_for(cfg.get("tgt_file")) or ""
+        return run_sheet_row_inserter_step(
+            src_file_path=src_p,
+            src_sheet=cfg.get("src_sheet", ""),
+            src_col_category=cfg.get("src_col_category", ""),
+            src_col_particulars=cfg.get("src_col_particulars", ""),
+            src_col_value=cfg.get("src_col_value", ""),
+            tgt_file=tgt_p,
+            sheet_match_mode=cfg.get("sheet_match_mode", "cat_in_sheet"),
+            anchor_col=cfg.get("anchor_col", ""),
+            anchor_mode=cfg.get("anchor_mode", "particulars"),
+            anchor_value=cfg.get("anchor_value", ""),
+            anchor_match=cfg.get("anchor_match", "exact"),
+            insert_position=cfg.get("insert_position", "after_last"),
+            tgt_col_particulars=cfg.get("tgt_col_particulars", ""),
+            tgt_col_value=cfg.get("tgt_col_value", ""),
+            extra_col_map=cfg.get("extra_col_map") or [],
+            tgt_header_row=int(cfg.get("tgt_header_row", 1) or 1),
         )
 
     if step_type == "split_export":

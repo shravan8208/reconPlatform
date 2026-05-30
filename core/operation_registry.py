@@ -155,6 +155,14 @@ OPERATION_REGISTRY = {
         "when_to_use": "When your data has categories as column headers (Rent, Salary, Travel) and you need them as row values instead — classic wide-to-long reshaping",
         "difficulty": "standard",
     },
+    "sheet_row_inserter": {
+        "user_label": "Sheet Row Inserter",
+        "category": "Format & Report",
+        "icon": "table_rows",
+        "description": "Insert rows from a master sheet into specific positions inside a multi-sheet target workbook — finds an anchor row and inserts above/below it",
+        "when_to_use": "When you have a reporting MIS with sections (e.g. REFUNDS, CROSS CREDITS) and need to insert new data rows inside those sections, not append to the end",
+        "difficulty": "standard",
+    },
     "sheet_updater": {
         "user_label": "Sheet Updater",
         "category": "Format & Report",
