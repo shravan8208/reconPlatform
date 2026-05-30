@@ -4146,7 +4146,7 @@ def _get_class_cfg(i):
         "rule_contains":  g("rule_contains"),
         "rule_starts_with": g("rule_starts_with"),
         "rule_ends_with": g("rule_ends_with"),
-        "rule_extension": g("rule_extension", ".xlsx"),
+        "rule_extension": g("rule_extension", "All Excel (.xlsx, .xlsb, .xls, .xlsm)"),
         "rule_excludes":  g("rule_excludes"),
         "date_pattern":   g("date_pattern"),
         "date_pick":      g("date_pick", "first"),
